@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2>Register card</h2>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<form method="post" action="/register/resolve">
+  <p>
+    <label>Card UID<br>
+      <input type="text" name="uid" value="{{ uid }}" required
+             placeholder="scan a card or paste the UID">
+    </label>
+  </p>
+  <p>
+    <label>Spotify link<br>
+      <input type="text" name="link" value="{{ link or '' }}" required
+             placeholder="paste any Spotify share link or URI">
+    </label>
+    <button>Look up</button>
+  </p>
+</form>
+
+{% if result %}
+<div class="card-preview">
+  {% if result.artwork_url %}<img src="{{ result.artwork_url }}" alt="">{% endif %}
+  <div>
+    <strong>{{ result.name }}</strong>
+    {% if result.artist %}<div class="muted">{{ result.artist }}</div>{% endif %}
+    <div class="muted">{{ result.content_type }} &middot; <code>{{ result.uri }}</code></div>
+  </div>
+</div>
+<form method="post" action="/register/save">
+  <input type="hidden" name="uid" value="{{ uid }}">
+  <input type="hidden" name="uri" value="{{ result.uri }}">
+  <input type="hidden" name="content_type" value="{{ result.content_type }}">
+  <input type="hidden" name="name" value="{{ result.name }}">
+  <input type="hidden" name="artist" value="{{ result.artist or '' }}">
+  <input type="hidden" name="artwork_url" value="{{ result.artwork_url or '' }}">
+  <button>Save card</button>
+</form>
+{% endif %}
+
+<hr>
+<h3>Or make it a control card</h3>
+<form method="post" action="/register/control">
+  <input type="hidden" name="uid" value="{{ uid }}">
+  <select name="action">
+    {% for a in actions %}<option value="{{ a }}">{{ a.replace('_', ' ') }}</option>{% endfor %}
+  </select>
+  <button class="secondary">Save control card</button>
+</form>
+
+{% endblock %}

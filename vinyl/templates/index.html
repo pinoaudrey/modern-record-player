@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if pending %}
+<div class="banner">
+  New card scanned: <code>{{ pending.uid }}</code> &mdash;
+  <a href="/register?uid={{ pending.uid }}">register it</a>
+</div>
+{% endif %}
+
+<p>
+  <a href="/register">+ Register a card manually</a>
+  <span class="muted">(or just scan an unregistered card on the player)</span>
+</p>
+
+<table>
+  <tr><th></th><th>Name</th><th>Type</th><th>Plays</th><th></th></tr>
+  {% for card in cards %}
+  <tr>
+    <td>{% if card.artwork_url %}<img class="art" src="{{ card.artwork_url }}" alt="">{% endif %}</td>
+    <td>
+      {{ card.name or card.uid }}
+      {% if card.artist %}<div class="muted">{{ card.artist }}</div>{% endif %}
+      <div class="muted"><code>{{ card.uid }}</code></div>
+    </td>
+    <td>{{ card.action if card.kind == 'control' else card.content_type }}</td>
+    <td>{{ card.play_count }}</td>
+    <td>
+      {% if card.kind == 'content' %}
+      <form class="inline" method="post" action="/cards/{{ card.uid }}/play"><button>Play</button></form>
+      {% endif %}
+      <form class="inline" method="post" action="/cards/{{ card.uid }}/delete"
+            onsubmit="return confirm('Delete this card?')">
+        <button class="danger">Delete</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No cards registered yet. Scan one to get started.</td></tr>
+  {% endfor %}
+</table>
+
+<script>
+  const hadPending = {{ 'true' if pending else 'false' }};
+  setInterval(async () => {
+    const r = await fetch('/api/pending');
+    const { uid } = await r.json();
+    if (uid && !hadPending) location.reload();
+  }, 2000);
+</script>
+{% endblock %}

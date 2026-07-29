@@ -1,0 +1,27 @@
+[project]
+name = "modern-record-player"
+version = "0.1.0"
+description = "RFID vinyl record player for Spotify on a Raspberry Pi"
+requires-python = ">=3.11"
+dependencies = [
+    "spotipy>=2.25",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[tool.setuptools]
+packages = ["vinyl"]
+
+[tool.setuptools.package-data]
+vinyl = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

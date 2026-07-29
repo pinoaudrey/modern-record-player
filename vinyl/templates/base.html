@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Modern Record Player</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    a { color: #1db954; }
+    .banner { background: #1db954; color: #fff; padding: .75rem 1rem; border-radius: 8px; margin-bottom: 1rem; }
+    .banner a { color: #fff; font-weight: 600; }
+    .error { background: #c0392b; color: #fff; padding: .75rem 1rem; border-radius: 8px; margin-bottom: 1rem; }
+    table { width: 100%; border-collapse: collapse; }
+    td, th { padding: .5rem; text-align: left; border-bottom: 1px solid #8884; vertical-align: middle; }
+    img.art { width: 44px; height: 44px; border-radius: 4px; object-fit: cover; }
+    .muted { opacity: .6; font-size: .85rem; }
+    form.inline { display: inline; }
+    input[type=text], select { padding: .45rem; border-radius: 6px; border: 1px solid #8886; min-width: 16rem; }
+    button { padding: .45rem .9rem; border-radius: 6px; border: none; background: #1db954; color: #fff; cursor: pointer; }
+    button.danger { background: #c0392b; }
+    button.secondary { background: #666; }
+    .card-preview { display: flex; gap: 1rem; align-items: center; border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    .card-preview img { width: 80px; height: 80px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1><a href="/" style="text-decoration:none">&#9679; Modern Record Player</a></h1>
+  {% block content %}{% endblock %}
+</body>
+</html>

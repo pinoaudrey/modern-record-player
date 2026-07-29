@@ -1,0 +1,15 @@
+[Unit]
+Description=Modern Record Player (RFID Spotify)
+After=network-online.target raspotify.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/Documents/modern-record-player
+ExecStart=/home/%i/Documents/modern-record-player/.venv/bin/python -m vinyl run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
