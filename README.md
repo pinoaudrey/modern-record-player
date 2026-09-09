@@ -41,24 +41,25 @@ database-registered cards.
 
 ## Pi setup
 
-```bash
-sudo raspi-config nonint do_spi 0        # enable SPI
-sudo apt update && sudo apt install -y python3-venv mpg123
-curl -sL https://dtcooper.github.io/raspotify/install.sh | sh   # Spotify Connect target
-```
+Flash Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager, setting the
+hostname, your user, Wi-Fi and SSH in its customisation screen. Then, on the
+Pi:
 
 ```bash
-cd ~/Documents
-git clone https://github.com/pinoaudrey/modern-record-player.git
-cd modern-record-player
-python3 -m venv .venv
-.venv/bin/pip install -e . -r requirements-pi.txt
-cp config.example.toml config.toml      # then edit: set reader driver to "rc522"
+curl -sL https://raw.githubusercontent.com/pinoaudrey/modern-record-player/main/deploy/install-pi.sh | bash
+sudo reboot
 ```
 
-Pi 5 note: `requirements-pi.txt` installs `rpi-lgpio`, a drop-in `RPi.GPIO`
-replacement for the Pi 5's RP1 chip. Never install the real `RPi.GPIO`
-alongside it.
+The script enables SPI, installs raspotify (named "Record Player" so it's easy
+to find in the Spotify app), clones this repo into `~/Documents`, builds the
+venv, writes `config.toml`, and installs the systemd service so the player
+starts at boot. Safe to re-run to update.
+
+Pi 5 note: the GPIO stack comes from apt (`python3-rpi-lgpio`, a drop-in
+`RPi.GPIO` replacement for the Pi 5's RP1 chip) and the venv sees it via
+`--system-site-packages`. The `mfrc522` package declares a dependency on the
+real `RPi.GPIO`, so it is installed with `--no-deps`. Never install the real
+`RPi.GPIO` alongside the shim.
 
 ## Spotify setup (one time)
 
@@ -70,8 +71,9 @@ Pi. Requirements on the Spotify dashboard app:
 - Any account that will use the player must be added under User Management
   (dev mode allows 5 users) and needs Premium for playback
 
-Then, on the Pi (with a browser, or copy the printed URL to another machine
-and paste the redirect back):
+Then, on the Pi over ssh (it prints a URL: open it on your phone or laptop,
+log in, and paste the `http://127.0.0.1:8080/callback?code=...` address the
+browser lands on back into the terminal, even though that page won't load):
 
 ```bash
 .venv/bin/python -m vinyl auth
@@ -121,11 +123,14 @@ the RC522 can't be shared between processes):
 .venv/bin/python -m vinyl write <spotify link>    # write that URI to the next card tapped
 ```
 
-### Run at boot
+### Service
+
+`install-pi.sh` installs and enables `record-player@<user>`. Useful commands:
 
 ```bash
-sudo cp deploy/record-player.service /etc/systemd/system/record-player@$(whoami).service
-sudo systemctl enable --now record-player@$(whoami)
+sudo systemctl status record-player@$USER
+journalctl -u record-player@$USER -f
+sudo systemctl restart record-player@$USER
 ```
 
 ## Development (no Pi needed)

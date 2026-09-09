@@ -1,6 +1,0 @@
-# Hardware deps for Raspberry Pi 5 only. Do NOT install on dev machines.
-# rpi-lgpio is a drop-in RPi.GPIO replacement that works with the Pi 5's RP1
-# GPIO chip; the real RPi.GPIO package does not. Never install both.
-rpi-lgpio>=0.6
-spidev>=3.6
-mfrc522>=0.0.7

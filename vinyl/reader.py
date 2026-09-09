@@ -52,7 +52,7 @@ def _clean(text: str | None) -> str:
 
 
 class RC522Reader:
-    """MFRC522 over SPI. Requires rpi-lgpio + spidev + mfrc522 (see requirements-pi.txt).
+    """MFRC522 over SPI. Requires rpi-lgpio + spidev + mfrc522 (see deploy/install-pi.sh).
 
     Uses the library's non-blocking calls with a short sleep between attempts;
     its blocking read() busy-spins a core at 100%.
