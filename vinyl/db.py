@@ -6,6 +6,8 @@ from pathlib import Path
 
 CONTROL_ACTIONS = {"play_pause", "next", "prev", "shuffle", "switch_device"}
 
+SCHEMA_VERSION = 2
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS cards (
     uid TEXT PRIMARY KEY,
@@ -18,14 +20,19 @@ CREATE TABLE IF NOT EXISTS cards (
     action TEXT,
     created_at TEXT NOT NULL,
     last_played_at TEXT,
-    play_count INTEGER NOT NULL DEFAULT 0
+    play_count INTEGER NOT NULL DEFAULT 0,
+    on_tag INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
 """
+
+# version -> statements that bring a database from version-1 up to version
+_MIGRATIONS: dict[int, list[str]] = {
+    2: ["ALTER TABLE cards ADD COLUMN on_tag INTEGER NOT NULL DEFAULT 0"],
+}
 
 
 @dataclass(frozen=True)
@@ -41,6 +48,7 @@ class Card:
     created_at: str
     last_played_at: str | None
     play_count: int
+    on_tag: int  # 1 if the card's tag memory holds this uri (self-describing card)
 
 
 def _now() -> str:
@@ -54,8 +62,31 @@ class Database:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._lock = threading.Lock()
         with self._lock:
+            fresh = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cards'"
+            ).fetchone() is None
             self._conn.executescript(_SCHEMA)
+            if fresh:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(SCHEMA_VERSION),),
+                )
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        version = self.schema_version()
+        for target in range(version + 1, SCHEMA_VERSION + 1):
+            for stmt in _MIGRATIONS.get(target, []):
+                self._conn.execute(stmt)
+            self._conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(target),),
+            )
+
+    def schema_version(self) -> int:
+        row = self._conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        return int(row["value"]) if row else 1
 
     def close(self) -> None:
         self._conn.close()
@@ -78,16 +109,17 @@ class Database:
         name: str,
         artist: str | None,
         artwork_url: str | None,
+        on_tag: bool = False,
     ) -> None:
         with self._lock:
             self._conn.execute(
-                """INSERT INTO cards (uid, kind, uri, content_type, name, artist, artwork_url, created_at)
-                   VALUES (?, 'content', ?, ?, ?, ?, ?, ?)
+                """INSERT INTO cards (uid, kind, uri, content_type, name, artist, artwork_url, on_tag, created_at)
+                   VALUES (?, 'content', ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(uid) DO UPDATE SET
                      kind='content', uri=excluded.uri, content_type=excluded.content_type,
                      name=excluded.name, artist=excluded.artist, artwork_url=excluded.artwork_url,
-                     action=NULL""",
-                (uid, uri, content_type, name, artist, artwork_url, _now()),
+                     on_tag=excluded.on_tag, action=NULL""",
+                (uid, uri, content_type, name, artist, artwork_url, int(on_tag), _now()),
             )
             self._conn.commit()
 
@@ -100,7 +132,7 @@ class Database:
                    VALUES (?, 'control', ?, ?, ?)
                    ON CONFLICT(uid) DO UPDATE SET
                      kind='control', action=excluded.action, name=excluded.name,
-                     uri=NULL, content_type=NULL, artist=NULL, artwork_url=NULL""",
+                     uri=NULL, content_type=NULL, artist=NULL, artwork_url=NULL, on_tag=0""",
                 (uid, action, action.replace("_", " ").title(), _now()),
             )
             self._conn.commit()

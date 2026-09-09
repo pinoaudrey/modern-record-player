@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from vinyl.db import Database
+from vinyl.spotify import ResolvedContent
 
 
 @dataclass
@@ -13,6 +14,20 @@ class FakeSpotify:
     calls: list[str] = field(default_factory=list)
     shuffle_state: bool = False
     device: str | None = "raspotify-device-id"
+    authorized: bool = True
+    now: ResolvedContent | None = None
+    resolve_error: Exception | None = None
+
+    def resolve(self, ref):
+        if self.resolve_error:
+            raise self.resolve_error
+        return ResolvedContent(
+            uri=ref.uri, content_type=ref.type, name="Dreamland",
+            artist="Glass Animals", artwork_url="http://img",
+        )
+
+    def now_playing_content(self):
+        return self.now
 
     def play(self, uri):
         self.played.append(uri)

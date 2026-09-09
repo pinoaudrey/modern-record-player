@@ -1,12 +1,64 @@
 {% extends "base.html" %}
 {% block content %}
 
+{% if write %}
+<div class="banner armed">
+  <span class="pulse"></span>
+  Hold a card on the reader to write <strong>{{ write.content.name }}</strong> to it.
+  <form class="inline" method="post" action="/write/cancel"><button class="secondary">Cancel</button></form>
+</div>
+{% endif %}
+
+{% if last_write %}
+  {% if last_write.ok %}
+  <div class="banner">
+    Wrote <strong>{{ last_write.content.name }}</strong> to card <code>{{ last_write.uid }}</code>.
+    It's registered here and will play on any other player too.
+    <form class="inline" method="post" action="/write/dismiss"><button class="secondary">OK</button></form>
+  </div>
+  {% else %}
+  <div class="error">
+    Couldn't write <strong>{{ last_write.content.name }}</strong>: {{ last_write.error }}
+    <form class="inline" method="post" action="/write/arm">
+      {% with c = last_write.content %}{% include "_content_fields.html" %}{% endwith %}
+      <button class="secondary">Try again</button>
+    </form>
+    <form class="inline" method="post" action="/write/dismiss"><button class="secondary">Dismiss</button></form>
+  </div>
+  {% endif %}
+{% endif %}
+
 {% if pending %}
 <div class="banner">
   New card scanned: <code>{{ pending.uid }}</code> &mdash;
   <a href="/register?uid={{ pending.uid }}">register it</a>
 </div>
 {% endif %}
+
+<section class="panel">
+  <h2>Now playing</h2>
+  {% if now %}
+  <div class="card-preview">
+    {% if now.artwork_url %}<img src="{{ now.artwork_url }}" alt="">{% endif %}
+    <div class="grow">
+      <strong>{{ now.name }}</strong>
+      {% if now.artist %}<div class="muted">{{ now.artist }}</div>{% endif %}
+      <div class="muted">{{ now.content_type }}</div>
+    </div>
+    <form method="post" action="/write/arm">
+      {% with c = now %}{% include "_content_fields.html" %}{% endwith %}
+      <button>Make a record of this</button>
+    </form>
+  </div>
+  <p class="muted">Click, then hold a blank card on the reader. The card gets the Spotify URI written into it and is registered in one go.</p>
+  {% elif now_error == 'not_authorized' %}
+  <p class="muted">Spotify isn't authorized on this player yet. Run <code>python -m vinyl auth</code> on it.</p>
+  {% elif now_error %}
+  <p class="muted">Couldn't reach Spotify: {{ now_error }}</p>
+  {% else %}
+  <p class="muted">Nothing playing. Start something in the Spotify app and <a href="/">refresh</a>.</p>
+  {% endif %}
+</section>
 
 <p>
   <a href="/register">+ Register a card manually</a>
@@ -20,14 +72,18 @@
     <td>{% if card.artwork_url %}<img class="art" src="{{ card.artwork_url }}" alt="">{% endif %}</td>
     <td>
       {{ card.name or card.uid }}
+      {% if card.on_tag %}<span class="badge" title="The card's own memory holds this URI, so it plays on any player">on tag</span>{% endif %}
       {% if card.artist %}<div class="muted">{{ card.artist }}</div>{% endif %}
       <div class="muted"><code>{{ card.uid }}</code></div>
     </td>
     <td>{{ card.action if card.kind == 'control' else card.content_type }}</td>
     <td>{{ card.play_count }}</td>
-    <td>
+    <td class="actions">
       {% if card.kind == 'content' %}
       <form class="inline" method="post" action="/cards/{{ card.uid }}/play"><button>Play</button></form>
+      <form class="inline" method="post" action="/cards/{{ card.uid }}/write">
+        <button class="secondary" title="Write this URI onto a card (this one, or a copy)">Write to card</button>
+      </form>
       {% endif %}
       <form class="inline" method="post" action="/cards/{{ card.uid }}/delete"
             onsubmit="return confirm('Delete this card?')">
@@ -41,11 +97,15 @@
 </table>
 
 <script>
-  const hadPending = {{ 'true' if pending else 'false' }};
+  // Reload when the player's state changes: a new card scanned, a write
+  // armed or finished. Cheap enough to poll; it never touches Spotify.
+  const stamp = {{ stamp | tojson }};
   setInterval(async () => {
-    const r = await fetch('/api/pending');
-    const { uid } = await r.json();
-    if (uid && !hadPending) location.reload();
-  }, 2000);
+    try {
+      const r = await fetch('/api/status');
+      const s = await r.json();
+      if (s.stamp !== stamp) location.reload();
+    } catch (e) { /* server restarting */ }
+  }, 1500);
 </script>
 {% endblock %}

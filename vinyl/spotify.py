@@ -7,11 +7,15 @@ import spotipy
 from spotipy.oauth2 import SpotifyPKCE
 
 from .config import Config
-from .links import SpotifyRef
+from .links import SpotifyRef, parse_ref
 
 log = logging.getLogger(__name__)
 
 SCOPES = "user-read-playback-state,user-modify-playback-state,user-library-read"
+
+
+class NotAuthorized(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,18 @@ class ResolvedContent:
     name: str
     artist: str | None
     artwork_url: str | None
+
+
+@dataclass(frozen=True)
+class NowPlaying:
+    track_name: str
+    artist: str
+    album_name: str
+    album_uri: str
+    artwork_url: str | None
+    context_uri: str | None
+    is_playing: bool
+    device_name: str | None
 
 
 def make_auth_manager(cfg: Config, open_browser: bool) -> SpotifyPKCE:
@@ -36,12 +52,30 @@ def make_auth_manager(cfg: Config, open_browser: bool) -> SpotifyPKCE:
 class SpotifyClient:
     def __init__(self, cfg: Config, open_browser: bool = False):
         self._cfg = cfg
-        self._sp = spotipy.Spotify(auth_manager=make_auth_manager(cfg, open_browser))
+        self._auth = make_auth_manager(cfg, open_browser)
+        self._sp = spotipy.Spotify(auth_manager=self._auth)
         self._device_id: str | None = None
+
+    @property
+    def authorized(self) -> bool:
+        """True if a usable token is cached. Refreshes it if expired."""
+        try:
+            return self._auth.validate_token(self._auth.cache_handler.get_cached_token()) is not None
+        except Exception as e:  # network error during refresh, corrupt cache
+            log.warning("Token check failed: %s", e)
+            return False
+
+    @property
+    def sp(self) -> spotipy.Spotify:
+        # Without this, spotipy would fall back to an interactive input() prompt
+        # inside the scan loop or a web request and hang there forever.
+        if not self.authorized:
+            raise NotAuthorized("Spotify isn't authorized yet. Run: python -m vinyl auth")
+        return self._sp
 
     def resolve(self, ref: SpotifyRef) -> ResolvedContent:
         if ref.type == "track":
-            t = self._sp.track(ref.id)
+            t = self.sp.track(ref.id)
             return ResolvedContent(
                 uri=ref.uri,
                 content_type="track",
@@ -50,7 +84,7 @@ class SpotifyClient:
                 artwork_url=_first_image(t["album"]),
             )
         if ref.type == "album":
-            a = self._sp.album(ref.id)
+            a = self.sp.album(ref.id)
             return ResolvedContent(
                 uri=ref.uri,
                 content_type="album",
@@ -59,7 +93,7 @@ class SpotifyClient:
                 artwork_url=_first_image(a),
             )
         if ref.type == "playlist":
-            p = self._sp.playlist(ref.id, fields="name,images,owner.display_name")
+            p = self.sp.playlist(ref.id, fields="name,images,owner.display_name")
             return ResolvedContent(
                 uri=ref.uri,
                 content_type="playlist",
@@ -68,7 +102,7 @@ class SpotifyClient:
                 artwork_url=_first_image(p),
             )
         if ref.type == "artist":
-            a = self._sp.artist(ref.id)
+            a = self.sp.artist(ref.id)
             return ResolvedContent(
                 uri=ref.uri,
                 content_type="artist",
@@ -80,7 +114,7 @@ class SpotifyClient:
 
     def search(self, query: str, content_type: str = "album") -> list[ResolvedContent]:
         # Search limit is capped at 10 by the API as of Feb 2026
-        results = self._sp.search(q=query, type=content_type, limit=10)
+        results = self.sp.search(q=query, type=content_type, limit=10)
         items = results.get(f"{content_type}s", {}).get("items", [])
         out = []
         for item in items:
@@ -106,11 +140,53 @@ class SpotifyClient:
             )
         return out
 
+    # --- now playing --------------------------------------------------------
+
+    def now_playing(self) -> NowPlaying | None:
+        state = self.sp.current_playback()
+        item = (state or {}).get("item")
+        if not item or item.get("type") != "track":  # nothing, or a podcast episode
+            return None
+        album = item["album"]
+        return NowPlaying(
+            track_name=item["name"],
+            artist=", ".join(a["name"] for a in item["artists"]),
+            album_name=album["name"],
+            album_uri=album["uri"],
+            artwork_url=_first_image(album),
+            context_uri=(state.get("context") or {}).get("uri"),
+            is_playing=bool(state.get("is_playing")),
+            device_name=(state.get("device") or {}).get("name"),
+        )
+
+    def now_playing_content(self) -> ResolvedContent | None:
+        """What a card for "this" should hold: the playlist/album/artist being
+        played from, or the current track's album when there's no usable
+        context (Liked Songs, a queue, a radio)."""
+        np = self.now_playing()
+        if np is None:
+            return None
+        album = ResolvedContent(
+            uri=np.album_uri,
+            content_type="album",
+            name=np.album_name,
+            artist=np.artist,
+            artwork_url=np.artwork_url,
+        )
+        ref = parse_ref(np.context_uri) if np.context_uri else None
+        if ref is None or ref.type == "track" or ref.uri == np.album_uri:
+            return album
+        try:
+            return self.resolve(ref)
+        except Exception as e:
+            log.warning("Could not resolve playback context %s: %s", ref.uri, e)
+            return album
+
     # --- playback -----------------------------------------------------------
 
     def device_id(self, refresh: bool = False) -> str | None:
         if self._device_id is None or refresh:
-            devices = self._sp.devices().get("devices", [])
+            devices = self.sp.devices().get("devices", [])
             wanted = self._cfg.device_name.lower()
             for d in devices:
                 if d["name"].lower() == wanted:
@@ -131,42 +207,42 @@ class SpotifyClient:
         if device is None:
             raise RuntimeError("No Spotify Connect devices available")
         if uri.startswith("spotify:track:"):
-            self._sp.start_playback(device_id=device, uris=[uri])
+            self.sp.start_playback(device_id=device, uris=[uri])
         else:
-            self._sp.start_playback(device_id=device, context_uri=uri)
+            self.sp.start_playback(device_id=device, context_uri=uri)
 
     def play_pause(self) -> None:
-        state = self._sp.current_playback()
+        state = self.sp.current_playback()
         if state and state.get("is_playing"):
-            self._sp.pause_playback(device_id=self.device_id())
+            self.sp.pause_playback(device_id=self.device_id())
         else:
-            self._sp.start_playback(device_id=self.device_id())
+            self.sp.start_playback(device_id=self.device_id())
 
     def next_track(self) -> None:
-        self._sp.next_track(device_id=self.device_id())
+        self.sp.next_track(device_id=self.device_id())
 
     def prev_track(self) -> None:
-        self._sp.previous_track(device_id=self.device_id())
+        self.sp.previous_track(device_id=self.device_id())
 
     def toggle_shuffle(self) -> bool:
-        state = self._sp.current_playback()
+        state = self.sp.current_playback()
         new_state = not (state and state.get("shuffle_state"))
-        self._sp.shuffle(new_state, device_id=self.device_id())
+        self.sp.shuffle(new_state, device_id=self.device_id())
         return new_state
 
     def switch_device(self) -> str | None:
-        devices = self._sp.devices().get("devices", [])
+        devices = self.sp.devices().get("devices", [])
         if not devices:
             return None
         ids = [d["id"] for d in devices]
         current = self.device_id()
         idx = (ids.index(current) + 1) % len(ids) if current in ids else 0
         self._device_id = ids[idx]
-        self._sp.transfer_playback(device_id=self._device_id, force_play=True)
+        self.sp.transfer_playback(device_id=self._device_id, force_play=True)
         return devices[idx]["name"]
 
     def list_devices(self) -> list[dict]:
-        return self._sp.devices().get("devices", [])
+        return self.sp.devices().get("devices", [])
 
 
 def _first_image(obj: dict) -> str | None:

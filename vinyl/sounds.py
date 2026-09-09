@@ -7,7 +7,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-CUES = ("startup", "accept", "error", "connect_device", "shuffle_on", "shuffle_off")
+CUES = ("startup", "accept", "error", "written", "connect_device", "shuffle_on", "shuffle_off")
 
 
 class Sounds:

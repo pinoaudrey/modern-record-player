@@ -1,9 +1,14 @@
 """Entry points: run the player + web admin, or one-off setup commands.
 
-  python -m vinyl run       start the reader loop and web admin
-  python -m vinyl auth      run the one-time Spotify PKCE authorization
-  python -m vinyl devices   list Spotify Connect devices (find your raspotify)
+  python -m vinyl run              start the reader loop and web admin
+  python -m vinyl auth             run the one-time Spotify PKCE authorization
+  python -m vinyl devices          list Spotify Connect devices (find your raspotify)
+  python -m vinyl now              show what's playing and what a card of it would hold
+  python -m vinyl write <link>     write a share link's URI onto the next card tapped
   python -m vinyl resolve <link>   debug: parse + look up a share link
+
+`write` talks to the reader directly, so on the Pi stop the service first
+(sudo systemctl stop record-player@$USER); two processes can't share the RC522.
 """
 
 import logging
@@ -18,7 +23,7 @@ from .links import parse_ref
 from .player import Player
 from .reader import make_reader
 from .sounds import Sounds
-from .spotify import SpotifyClient, make_auth_manager
+from .spotify import NotAuthorized, SpotifyClient, make_auth_manager
 from .web import create_app
 
 log = logging.getLogger(__name__)
@@ -31,6 +36,9 @@ def cmd_run() -> None:
     reader = make_reader(cfg.reader_driver)
     sounds = Sounds(cfg.sounds_dir)
     player = Player(db, spotify, reader, sounds, scan_cooldown=cfg.scan_cooldown)
+
+    if not spotify.authorized:
+        log.warning("Spotify is not authorized yet; cards will not play until you run: python -m vinyl auth")
 
     threading.Thread(target=player.run_forever, daemon=True, name="scan-loop").start()
 
@@ -59,6 +67,13 @@ def cmd_devices() -> None:
         print(f"{d['name']:30} {d['id']}{marker}")
 
 
+def _describe(content) -> str:
+    line = f"{content.content_type}: {content.name}"
+    if content.artist:
+        line += f" - {content.artist}"
+    return line
+
+
 def cmd_resolve(link: str) -> None:
     cfg = load_config()
     ref = parse_ref(link)
@@ -66,9 +81,43 @@ def cmd_resolve(link: str) -> None:
         print("No Spotify content found in that text")
         sys.exit(1)
     resolved = SpotifyClient(cfg).resolve(ref)
-    print(f"{resolved.content_type}: {resolved.name}"
-          + (f" - {resolved.artist}" if resolved.artist else ""))
+    print(_describe(resolved))
     print(resolved.uri)
+
+
+def cmd_now() -> None:
+    cfg = load_config()
+    spotify = SpotifyClient(cfg)
+    np = spotify.now_playing()
+    if np is None:
+        print("Nothing playing.")
+        return
+    state = "playing" if np.is_playing else "paused"
+    print(f"{np.track_name} - {np.artist} ({np.album_name}) [{state} on {np.device_name}]")
+    content = spotify.now_playing_content()
+    print(f"A record of this would hold -> {_describe(content)}")
+    print(content.uri)
+
+
+def cmd_write(link: str) -> None:
+    cfg = load_config()
+    ref = parse_ref(link)
+    if ref is None:
+        print("No Spotify content found in that text")
+        sys.exit(1)
+    content = SpotifyClient(cfg).resolve(ref)
+    reader = make_reader(cfg.reader_driver)
+    db = Database(cfg.db_path)
+    print(f"Hold a card on the reader to write {_describe(content)} ...")
+    scan = reader.write(content.uri, timeout=60)
+    if scan is None:
+        print("No card seen within 60 seconds.")
+        sys.exit(1)
+    db.save_content_card(
+        uid=scan.uid, uri=content.uri, content_type=content.content_type, name=content.name,
+        artist=content.artist, artwork_url=content.artwork_url, on_tag=True,
+    )
+    print(f"Wrote {content.uri} to card {scan.uid} and registered it.")
 
 
 def main() -> None:
@@ -78,17 +127,25 @@ def main() -> None:
     )
     args = sys.argv[1:]
     cmd = args[0] if args else "run"
-    if cmd == "run":
-        cmd_run()
-    elif cmd == "auth":
-        cmd_auth()
-    elif cmd == "devices":
-        cmd_devices()
-    elif cmd == "resolve" and len(args) > 1:
-        cmd_resolve(args[1])
-    else:
-        print(__doc__)
-        sys.exit(2)
+    try:
+        if cmd == "run":
+            cmd_run()
+        elif cmd == "auth":
+            cmd_auth()
+        elif cmd == "devices":
+            cmd_devices()
+        elif cmd == "now":
+            cmd_now()
+        elif cmd == "resolve" and len(args) > 1:
+            cmd_resolve(args[1])
+        elif cmd == "write" and len(args) > 1:
+            cmd_write(args[1])
+        else:
+            print(__doc__)
+            sys.exit(2)
+    except NotAuthorized as e:
+        print(e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

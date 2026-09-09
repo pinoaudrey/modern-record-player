@@ -8,8 +8,8 @@
 <form method="post" action="/register/resolve">
   <p>
     <label>Card UID<br>
-      <input type="text" name="uid" value="{{ uid }}" required
-             placeholder="scan a card or paste the UID">
+      <input type="text" name="uid" value="{{ uid }}"
+             placeholder="scan a card, paste the UID, or leave blank to write a card">
     </label>
   </p>
   <p>
@@ -19,6 +19,10 @@
     </label>
     <button>Look up</button>
   </p>
+</form>
+<form method="post" action="/register/now">
+  <input type="hidden" name="uid" value="{{ uid }}">
+  <button class="secondary">Use what's playing right now</button>
 </form>
 
 {% if result %}
@@ -32,12 +36,15 @@
 </div>
 <form method="post" action="/register/save">
   <input type="hidden" name="uid" value="{{ uid }}">
-  <input type="hidden" name="uri" value="{{ result.uri }}">
-  <input type="hidden" name="content_type" value="{{ result.content_type }}">
-  <input type="hidden" name="name" value="{{ result.name }}">
-  <input type="hidden" name="artist" value="{{ result.artist or '' }}">
-  <input type="hidden" name="artwork_url" value="{{ result.artwork_url or '' }}">
-  <button>Save card</button>
+  {% with c = result %}{% include "_content_fields.html" %}{% endwith %}
+  {% if uid %}<button>Save card</button>{% endif %}
+  <button class="secondary" name="write" value="1">
+    {% if uid %}Save &amp; write to card{% else %}Write to the next card{% endif %}
+  </button>
+  <div class="muted" style="margin-top:.5rem">
+    Writing puts the Spotify URI into the card's own memory, so the card also works on any other player.
+    After clicking, hold the card on the reader.
+  </div>
 </form>
 {% endif %}
 
@@ -48,7 +55,7 @@
   <select name="action">
     {% for a in actions %}<option value="{{ a }}">{{ a.replace('_', ' ') }}</option>{% endfor %}
   </select>
-  <button class="secondary">Save control card</button>
+  <button class="secondary" {% if not uid %}disabled title="Control cards need a UID"{% endif %}>Save control card</button>
 </form>
 
 {% endblock %}

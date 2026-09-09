@@ -55,3 +55,47 @@ def test_delete(db):
     db.save_content_card("123", "spotify:album:a", "album", "Album", None, None)
     db.delete_card("123")
     assert db.get_card("123") is None
+
+
+def test_on_tag_flag_saved_and_cleared_on_reregister(db):
+    db.save_content_card("1", "spotify:album:a", "album", "A", None, None, on_tag=True)
+    assert db.get_card("1").on_tag == 1
+    db.save_content_card("1", "spotify:album:b", "album", "B", None, None)
+    assert db.get_card("1").on_tag == 0
+    db.save_control_card("1", "next")
+    assert db.get_card("1").on_tag == 0
+
+
+def test_fresh_db_is_at_latest_schema(db):
+    from vinyl.db import SCHEMA_VERSION
+    assert db.schema_version() == SCHEMA_VERSION
+
+
+def test_migrates_slice1_database(tmp_path):
+    import sqlite3
+    from vinyl.db import Database
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE cards (
+            uid TEXT PRIMARY KEY, kind TEXT NOT NULL, uri TEXT, content_type TEXT,
+            name TEXT, artist TEXT, artwork_url TEXT, action TEXT,
+            created_at TEXT NOT NULL, last_played_at TEXT, play_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO meta VALUES ('schema_version', '1');
+        INSERT INTO cards (uid, kind, uri, content_type, name, created_at, play_count)
+            VALUES ('old', 'content', 'spotify:album:a', 'album', 'Old Album', '2026-01-01', 3);
+    """)
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    assert db.schema_version() == 2
+    card = db.get_card("old")
+    assert card.name == "Old Album" and card.play_count == 3 and card.on_tag == 0
+    db.save_content_card("old", "spotify:album:a", "album", "Old Album", None, None, on_tag=True)
+    assert db.get_card("old").on_tag == 1
+    db.close()
+    assert Database(path).schema_version() == 2  # reopening doesn't re-run migrations
