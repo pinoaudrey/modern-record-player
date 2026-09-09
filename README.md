@@ -26,12 +26,13 @@ and everything works on the Pi 5's new GPIO stack.
 | MOSI  | GPIO10 |
 | MISO  | GPIO9  |
 | GND   | GND    |
-| RST   | GPIO25 (physical pin 22) |
+| RST   | GPIO25 (physical pin 22), or any free GPIO, see below |
 | 3.3V  | 3V3    |
 
-Note: the `mfrc522` library defaults to physical pin 22 (GPIO25) for RST.
-The 2021 build docs said GPIO23; if reads fail on a rewired unit, this pin
-is the first thing to check.
+RST can go to any free GPIO as long as `rst_pin` in `config.toml` matches, in
+physical pin numbering: pin 22 is GPIO25 (the library default), pin 16 is
+GPIO23 (what the 2021 build used). If cards are never detected, this
+mismatch is the first thing to check.
 
 Cards: MIFARE Classic 1K, the white cards and blue fobs that ship with RC522
 kits (and the ones from the 2021 build). They hold 48 characters of text,

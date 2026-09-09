@@ -9,6 +9,7 @@ class Config:
     redirect_uri: str
     device_name: str
     reader_driver: str
+    reader_rst_pin: int
     scan_cooldown: float
     web_host: str
     web_port: int
@@ -30,6 +31,7 @@ def load_config(root: Path | None = None) -> Config:
         redirect_uri=raw["spotify"].get("redirect_uri", "http://127.0.0.1:8080/callback"),
         device_name=raw["spotify"].get("device_name", "raspotify"),
         reader_driver=raw["reader"].get("driver", "fake"),
+        reader_rst_pin=int(raw["reader"].get("rst_pin", 22)),
         scan_cooldown=float(raw["reader"].get("scan_cooldown", 2.0)),
         web_host=raw["web"].get("host", "0.0.0.0"),
         web_port=int(raw["web"].get("port", 8090)),

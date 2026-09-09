@@ -68,13 +68,38 @@ class StubSimpleMFRC522:
         return uid, text[:48]
 
 
-@pytest.fixture
-def rc522(monkeypatch):
+class StubMFRC522:
+    """The low-level driver; records the reset pin it was built with."""
+
+    instances: list = []
+
+    def __init__(self, bus=0, device=0, spd=1000000, pin_mode=10, pin_rst=-1, debugLevel="WARNING"):
+        self.pin_rst = pin_rst
+        StubMFRC522.instances.append(self)
+
+
+def _fake_mfrc522_module(monkeypatch):
     StubSimpleMFRC522.card = None
     StubSimpleMFRC522.accept_writes = True
-    monkeypatch.setitem(sys.modules, "mfrc522", types.SimpleNamespace(SimpleMFRC522=StubSimpleMFRC522))
+    StubMFRC522.instances = []
+    monkeypatch.setitem(
+        sys.modules, "mfrc522",
+        types.SimpleNamespace(SimpleMFRC522=StubSimpleMFRC522, MFRC522=StubMFRC522),
+    )
     monkeypatch.setattr("vinyl.reader._POLL_INTERVAL", 0.001)
+
+
+@pytest.fixture
+def rc522(monkeypatch):
+    _fake_mfrc522_module(monkeypatch)
     return RC522Reader()
+
+
+def test_rc522_reset_pin_is_configurable(monkeypatch):
+    _fake_mfrc522_module(monkeypatch)
+    RC522Reader()
+    RC522Reader(rst_pin=16)
+    assert [r.pin_rst for r in StubMFRC522.instances] == [22, 16]
 
 
 def test_rc522_poll_strips_padding_and_nulls(rc522):

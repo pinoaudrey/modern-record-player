@@ -58,10 +58,15 @@ class RC522Reader:
     its blocking read() busy-spins a core at 100%.
     """
 
-    def __init__(self):
-        from mfrc522 import SimpleMFRC522
+    DEFAULT_RST_PIN = 22  # physical pin numbering; pin 22 is GPIO25
 
-        self._reader = SimpleMFRC522()
+    def __init__(self, rst_pin: int = DEFAULT_RST_PIN):
+        from mfrc522 import MFRC522, SimpleMFRC522
+
+        # SimpleMFRC522() hardcodes the library's default reset pin, so build
+        # the low-level reader ourselves and hand it over.
+        self._reader = SimpleMFRC522.__new__(SimpleMFRC522)
+        self._reader.READER = MFRC522(pin_rst=rst_pin)
 
     def poll(self, timeout: float) -> Scan | None:
         deadline = time.monotonic() + timeout
@@ -144,9 +149,9 @@ class FakeReader:
         return Scan(uid=uid, text=text)
 
 
-def make_reader(driver: str) -> Reader:
+def make_reader(driver: str, rst_pin: int = RC522Reader.DEFAULT_RST_PIN) -> Reader:
     if driver == "rc522":
-        return RC522Reader()
+        return RC522Reader(rst_pin=rst_pin)
     if driver == "fake":
         return FakeReader()
     raise ValueError(f"unknown reader driver: {driver}")

@@ -33,7 +33,7 @@ def cmd_run() -> None:
     cfg = load_config()
     db = Database(cfg.db_path)
     spotify = SpotifyClient(cfg)
-    reader = make_reader(cfg.reader_driver)
+    reader = make_reader(cfg.reader_driver, cfg.reader_rst_pin)
     sounds = Sounds(cfg.sounds_dir)
     player = Player(db, spotify, reader, sounds, scan_cooldown=cfg.scan_cooldown)
 
@@ -109,7 +109,7 @@ def cmd_write(link: str) -> None:
         print("No Spotify content found in that text")
         sys.exit(1)
     content = SpotifyClient(cfg).resolve(ref)
-    reader = make_reader(cfg.reader_driver)
+    reader = make_reader(cfg.reader_driver, cfg.reader_rst_pin)
     db = Database(cfg.db_path)
     print(f"Hold a card on the reader to write {_describe(content)} ...")
     scan = reader.write(content.uri, timeout=60)

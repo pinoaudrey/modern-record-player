@@ -10,6 +10,9 @@ device_name = "raspotify"
 [reader]
 # "rc522" on the Pi, "fake" for development (inject scans via POST /dev/scan)
 driver = "fake"
+# RC522 RST wire, in PHYSICAL pin numbering (the 1-40 header count, not GPIO
+# numbers). 22 = GPIO25 (library default), 16 = GPIO23 (the 2021 build's wiring).
+rst_pin = 22
 # Ignore repeat reads of the same card within this many seconds
 scan_cooldown = 2.0
 
