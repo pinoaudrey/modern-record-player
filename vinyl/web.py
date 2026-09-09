@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .db import CONTROL_ACTIONS, Database
+from .history import DEFAULT_WINDOW, WINDOWS, HistoryPoller, build_report
 from .links import parse_ref
 from .player import Player
 from .reader import FakeReader
@@ -18,7 +19,10 @@ log = logging.getLogger(__name__)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def create_app(db: Database, spotify: SpotifyClient, player: Player, reader=None) -> FastAPI:
+def create_app(
+    db: Database, spotify: SpotifyClient, player: Player, reader=None,
+    poller: HistoryPoller | None = None,
+) -> FastAPI:
     app = FastAPI(title="Modern Record Player")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -74,6 +78,21 @@ def create_app(db: Database, spotify: SpotifyClient, player: Player, reader=None
                 "now_error": now_error,
                 "stamp": status()["stamp"],
                 "actions": sorted(CONTROL_ACTIONS),
+            },
+        )
+
+    @app.get("/records", response_class=HTMLResponse)
+    def records(request: Request, window: str = DEFAULT_WINDOW):
+        report = build_report(db, spotify, window)
+        return templates.TemplateResponse(
+            request,
+            "records.html",
+            {
+                "report": report,
+                "windows": WINDOWS,
+                "recent": db.recent_plays(15),
+                "total_plays": db.play_count(),
+                "last_poll": (poller.last_poll_at or "").replace("T", " ").rstrip("Z") if poller else None,
             },
         )
 

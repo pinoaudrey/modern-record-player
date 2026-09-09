@@ -7,11 +7,17 @@ import spotipy
 from spotipy.oauth2 import SpotifyPKCE
 
 from .config import Config
-from .links import SpotifyRef, parse_ref
+from .links import SpotifyRef, is_editorial_playlist, parse_ref
 
 log = logging.getLogger(__name__)
 
-SCOPES = "user-read-playback-state,user-modify-playback-state,user-library-read"
+SCOPES = ",".join([
+    "user-read-playback-state",
+    "user-modify-playback-state",
+    "user-library-read",
+    "user-read-recently-played",   # play history poller
+    "user-top-read",               # your top artists/tracks
+])
 
 
 class NotAuthorized(RuntimeError):
@@ -25,6 +31,25 @@ class ResolvedContent:
     name: str
     artist: str | None
     artwork_url: str | None
+    note: str | None = None  # something the admin should tell the user about this pick
+
+
+@dataclass(frozen=True)
+class RecentPlay:
+    played_at: str
+    track_uri: str
+    track_name: str
+    artist: str
+    album_uri: str
+    album_name: str
+    artwork_url: str | None
+    context_uri: str | None
+
+
+EDITORIAL_NOTE = (
+    "You're playing from a Spotify-curated playlist, which Spotify's API won't describe "
+    "to this app, so the card is the current album instead."
+)
 
 
 @dataclass(frozen=True)
@@ -84,7 +109,7 @@ class SpotifyClient:
         # Without this, spotipy would fall back to an interactive input() prompt
         # inside the scan loop or a web request and hang there forever.
         if not self.authorized:
-            raise NotAuthorized("Spotify isn't authorized yet. Run: python -m vinyl auth")
+            raise NotAuthorized("Spotify isn't connected yet. Open the admin's Connect Spotify page (/auth).")
         return self._sp
 
     def resolve(self, ref: SpotifyRef) -> ResolvedContent:
@@ -190,11 +215,63 @@ class SpotifyClient:
         ref = parse_ref(np.context_uri) if np.context_uri else None
         if ref is None or ref.type == "track" or ref.uri == np.album_uri:
             return album
+        if is_editorial_playlist(ref):
+            return ResolvedContent(**{**album.__dict__, "note": EDITORIAL_NOTE})
         try:
             return self.resolve(ref)
         except Exception as e:
             log.warning("Could not resolve playback context %s: %s", ref.uri, e)
             return album
+
+    # --- listening history --------------------------------------------------
+
+    def recently_played(self, limit: int = 50) -> list[RecentPlay]:
+        """The last plays Spotify still remembers (max 50, tracks played >30s)."""
+        result = self.sp.current_user_recently_played(limit=limit)
+        out = []
+        for item in result.get("items", []):
+            t = item.get("track") or {}
+            if t.get("type") != "track" or not t.get("album"):
+                continue
+            out.append(RecentPlay(
+                played_at=item["played_at"],
+                track_uri=t["uri"],
+                track_name=t["name"],
+                artist=", ".join(a["name"] for a in t["artists"]),
+                album_uri=t["album"]["uri"],
+                album_name=t["album"]["name"],
+                artwork_url=_first_image(t["album"]),
+                context_uri=(item.get("context") or {}).get("uri"),
+            ))
+        return out
+
+    def top_artists(self, time_range: str = "medium_term", limit: int = 10) -> list[ResolvedContent]:
+        result = self.sp.current_user_top_artists(limit=limit, time_range=time_range)
+        return [
+            ResolvedContent(uri=a["uri"], content_type="artist", name=a["name"],
+                            artist=None, artwork_url=_first_image(a))
+            for a in result.get("items", [])
+        ]
+
+    def top_albums(self, time_range: str = "medium_term", limit: int = 10) -> list[tuple[ResolvedContent, int]]:
+        """Spotify ranks tracks, not albums; fold the top 50 tracks into their
+        albums and return (album, number of top tracks on it), most first."""
+        result = self.sp.current_user_top_tracks(limit=50, time_range=time_range)
+        counts: dict[str, list] = {}
+        for t in result.get("items", []):
+            album = t.get("album")
+            if not album:
+                continue
+            entry = counts.setdefault(album["uri"], [
+                ResolvedContent(
+                    uri=album["uri"], content_type="album", name=album["name"],
+                    artist=", ".join(a["name"] for a in album["artists"]),
+                    artwork_url=_first_image(album),
+                ), 0,
+            ])
+            entry[1] += 1
+        ranked = sorted(counts.values(), key=lambda e: -e[1])
+        return [(c, n) for c, n in ranked[:limit]]
 
     # --- playback -----------------------------------------------------------
 

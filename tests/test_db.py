@@ -91,11 +91,13 @@ def test_migrates_slice1_database(tmp_path):
     conn.commit()
     conn.close()
 
+    from vinyl.db import SCHEMA_VERSION
     db = Database(path)
-    assert db.schema_version() == 2
+    assert db.schema_version() == SCHEMA_VERSION
     card = db.get_card("old")
     assert card.name == "Old Album" and card.play_count == 3 and card.on_tag == 0
     db.save_content_card("old", "spotify:album:a", "album", "Old Album", None, None, on_tag=True)
     assert db.get_card("old").on_tag == 1
+    assert db.play_count() == 0  # v3 tables exist
     db.close()
-    assert Database(path).schema_version() == 2  # reopening doesn't re-run migrations
+    assert Database(path).schema_version() == SCHEMA_VERSION  # reopening doesn't re-run migrations

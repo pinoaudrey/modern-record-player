@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2>Make these records</h2>
+<p class="muted">
+  What you actually listen to, from the play history this player collects
+  ({{ total_plays }} plays so far{% if last_poll %}, last checked {{ last_poll }}{% endif %}).
+  Click <em>Make a record</em>, then hold a blank card on the reader.
+</p>
+
+<p class="tabs">
+  {% for key, (label, _, _) in windows.items() %}
+    {% if key == report.window %}<strong>{{ label }}</strong>{% else %}<a href="/records?window={{ key }}">{{ label }}</a>{% endif %}
+    {% if not loop.last %} &middot; {% endif %}
+  {% endfor %}
+  <span class="muted">&mdash; {{ report.plays_in_window }} plays</span>
+</p>
+
+{% macro rows(items, count_label) %}
+<table>
+  <tr><th></th><th>Name</th><th>Type</th><th>{{ count_label }}</th><th></th></tr>
+  {% for s in items %}
+  <tr>
+    <td>{% if s.content.artwork_url %}<img class="art" src="{{ s.content.artwork_url }}" alt="">{% endif %}</td>
+    <td>
+      {{ s.content.name }}
+      {% if s.content.artist %}<div class="muted">{{ s.content.artist }}</div>{% endif %}
+      {% if s.content.note %}<div class="muted">{{ s.content.note }}</div>{% endif %}
+    </td>
+    <td>{{ s.content.content_type }}</td>
+    <td>{{ s.plays if s.plays else '' }}</td>
+    <td class="actions">
+      {% if s.has_card %}
+        <span class="badge">on the shelf</span>
+      {% else %}
+        <form class="inline" method="post" action="/write/arm">
+          {% with c = s.content %}{% include "_content_fields.html" %}{% endwith %}
+          <button>Make a record</button>
+        </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">Nothing here yet.</td></tr>
+  {% endfor %}
+</table>
+{% endmacro %}
+
+<section class="panel">
+  <h2>Albums you played most</h2>
+  {{ rows(report.albums, 'Plays') }}
+</section>
+
+<section class="panel">
+  <h2>Playlists and artists you played from</h2>
+  {{ rows(report.contexts, 'Plays') }}
+</section>
+
+<section class="panel">
+  <h2>Spotify's picks: your top albums</h2>
+  <p class="muted">Spotify ranks tracks, not albums, so this counts how many of your top 50 tracks each album has.</p>
+  {% if report.spotify_error %}<p class="muted">Couldn't ask Spotify: {{ report.spotify_error }}</p>{% endif %}
+  {{ rows(report.top_albums, 'Top tracks') }}
+</section>
+
+<section class="panel">
+  <h2>Spotify's picks: your top artists</h2>
+  <p class="muted">An artist card plays that artist's popular tracks.</p>
+  {{ rows(report.top_artists, '') }}
+</section>
+
+<section class="panel">
+  <h2>Recent plays</h2>
+  <table>
+    {% for p in recent %}
+    <tr>
+      <td>{% if p.artwork_url %}<img class="art" src="{{ p.artwork_url }}" alt="">{% endif %}</td>
+      <td>{{ p.track_name }}<div class="muted">{{ p.artist }} &middot; {{ p.album_name }}</div></td>
+      <td class="muted">{{ p.played_at[:16].replace('T', ' ') }}</td>
+    </tr>
+    {% else %}
+    <tr><td class="muted">No plays collected yet. Play something on Spotify; the player checks every few minutes.</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+{% endblock %}

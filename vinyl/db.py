@@ -6,7 +6,7 @@ from pathlib import Path
 
 CONTROL_ACTIONS = {"play_pause", "next", "prev", "shuffle", "switch_device"}
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS cards (
@@ -27,11 +27,35 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS plays (
+    played_at TEXT PRIMARY KEY,
+    track_uri TEXT NOT NULL,
+    track_name TEXT NOT NULL,
+    artist TEXT,
+    album_uri TEXT NOT NULL,
+    album_name TEXT NOT NULL,
+    artwork_url TEXT,
+    context_uri TEXT
+);
+CREATE INDEX IF NOT EXISTS plays_album ON plays (album_uri);
+CREATE INDEX IF NOT EXISTS plays_context ON plays (context_uri);
+CREATE TABLE IF NOT EXISTS library (
+    uri TEXT PRIMARY KEY,
+    content_type TEXT NOT NULL,
+    name TEXT,
+    artist TEXT,
+    artwork_url TEXT,
+    available INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL
+);
 """
+
+_PLAYS_DDL = [stmt.strip() for stmt in _SCHEMA.split(";") if "plays" in stmt or "library" in stmt]
 
 # version -> statements that bring a database from version-1 up to version
 _MIGRATIONS: dict[int, list[str]] = {
     2: ["ALTER TABLE cards ADD COLUMN on_tag INTEGER NOT NULL DEFAULT 0"],
+    3: _PLAYS_DDL,  # CREATE IF NOT EXISTS, harmless on a fresh database
 }
 
 
@@ -51,8 +75,49 @@ class Card:
     on_tag: int  # 1 if the card's tag memory holds this uri (self-describing card)
 
 
+@dataclass(frozen=True)
+class Play:
+    played_at: str
+    track_uri: str
+    track_name: str
+    artist: str | None
+    album_uri: str
+    album_name: str
+    artwork_url: str | None
+    context_uri: str | None
+
+
+@dataclass(frozen=True)
+class LibraryItem:
+    uri: str
+    content_type: str
+    name: str | None
+    artist: str | None
+    artwork_url: str | None
+    available: int
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class PlayCount:
+    """An album or context with how often it was played in a window."""
+    uri: str
+    content_type: str
+    name: str | None
+    artist: str | None
+    artwork_url: str | None
+    plays: int
+    last_played_at: str
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def since_days(days: int) -> str:
+    """ISO UTC timestamp `days` ago, comparable with stored played_at strings."""
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 class Database:
@@ -147,6 +212,101 @@ class Database:
             self._conn.execute(
                 "UPDATE cards SET play_count = play_count + 1, last_played_at = ? WHERE uid = ?",
                 (_now(), uid),
+            )
+            self._conn.commit()
+
+
+    # --- meta ---------------------------------------------------------------
+
+    def get_meta(self, key: str) -> str | None:
+        row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value)
+            )
+            self._conn.commit()
+
+    # --- play history -------------------------------------------------------
+
+    def add_plays(self, plays: list[Play]) -> int:
+        """Insert plays not seen before (played_at is unique per account). Returns how many were new."""
+        if not plays:
+            return 0
+        with self._lock:
+            before = self._conn.total_changes
+            self._conn.executemany(
+                """INSERT OR IGNORE INTO plays
+                   (played_at, track_uri, track_name, artist, album_uri, album_name, artwork_url, context_uri)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [(p.played_at, p.track_uri, p.track_name, p.artist, p.album_uri,
+                  p.album_name, p.artwork_url, p.context_uri) for p in plays],
+            )
+            self._conn.commit()
+            return self._conn.total_changes - before
+
+    def recent_plays(self, limit: int = 20) -> list[Play]:
+        rows = self._conn.execute(
+            "SELECT * FROM plays ORDER BY played_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [Play(**{k: r[k] for k in r.keys()}) for r in rows]
+
+    def play_count(self, since: str | None = None) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM plays WHERE played_at >= ?", (since or "",)
+        ).fetchone()
+        return row["n"]
+
+    def top_albums(self, since: str | None = None, limit: int = 20) -> list[PlayCount]:
+        rows = self._conn.execute(
+            """SELECT album_uri AS uri, album_name AS name, MIN(artist) AS artist,
+                      MAX(artwork_url) AS artwork_url, COUNT(*) AS plays,
+                      MAX(played_at) AS last_played_at
+               FROM plays WHERE played_at >= ?
+               GROUP BY album_uri ORDER BY plays DESC, last_played_at DESC LIMIT ?""",
+            (since or "", limit),
+        ).fetchall()
+        return [PlayCount(uri=r["uri"], content_type="album", name=r["name"], artist=r["artist"],
+                          artwork_url=r["artwork_url"], plays=r["plays"],
+                          last_played_at=r["last_played_at"]) for r in rows]
+
+    def top_contexts(self, since: str | None = None, limit: int = 20) -> list[PlayCount]:
+        """Playlists/artists played from, with names from the library cache when known."""
+        rows = self._conn.execute(
+            """SELECT p.context_uri AS uri, COUNT(*) AS plays, MAX(p.played_at) AS last_played_at,
+                      l.name AS name, l.artist AS artist, l.artwork_url AS artwork_url
+               FROM plays p LEFT JOIN library l ON l.uri = p.context_uri
+               WHERE p.played_at >= ? AND p.context_uri IS NOT NULL
+                 AND p.context_uri NOT LIKE 'spotify:album:%'
+                 AND (p.context_uri LIKE 'spotify:playlist:%' OR p.context_uri LIKE 'spotify:artist:%')
+               GROUP BY p.context_uri ORDER BY plays DESC, last_played_at DESC LIMIT ?""",
+            (since or "", limit),
+        ).fetchall()
+        return [PlayCount(uri=r["uri"], content_type=r["uri"].split(":")[1], name=r["name"],
+                          artist=r["artist"], artwork_url=r["artwork_url"], plays=r["plays"],
+                          last_played_at=r["last_played_at"]) for r in rows]
+
+    def card_uris(self) -> set[str]:
+        rows = self._conn.execute("SELECT uri FROM cards WHERE uri IS NOT NULL").fetchall()
+        return {r["uri"] for r in rows}
+
+    # --- library cache (names/artwork for uris seen in history) -------------
+
+    def library_get(self, uri: str) -> LibraryItem | None:
+        row = self._conn.execute("SELECT * FROM library WHERE uri = ?", (uri,)).fetchone()
+        return LibraryItem(**{k: row[k] for k in row.keys()}) if row else None
+
+    def library_put(
+        self, uri: str, content_type: str, name: str | None, artist: str | None,
+        artwork_url: str | None, available: bool = True,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO library (uri, content_type, name, artist, artwork_url, available, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (uri, content_type, name, artist, artwork_url, int(available), _now()),
             )
             self._conn.commit()
 

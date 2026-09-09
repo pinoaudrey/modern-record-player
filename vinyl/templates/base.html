@@ -29,6 +29,9 @@
     .badge { font-size: .7rem; background: #1db95422; color: #1db954; border: 1px solid #1db95466; border-radius: 999px; padding: .05rem .5rem; margin-left: .3rem; vertical-align: middle; }
     .actions form { margin-bottom: .25rem; }
     ol.steps li { margin-bottom: 1rem; }
+    .tabs a { margin: 0 .1rem; }
+    nav.top { margin: -.5rem 0 1rem; }
+    nav.top a { margin-right: 1rem; }
     a button { pointer-events: none; }
     .banner.armed { background: #e67e22; display: flex; align-items: center; gap: .6rem; }
     .pulse { width: .7rem; height: .7rem; border-radius: 50%; background: #fff; animation: pulse 1s infinite; flex: none; }
@@ -37,6 +40,7 @@
 </head>
 <body>
   <h1><a href="/" style="text-decoration:none">&#9679; Modern Record Player</a></h1>
+  <nav class="top"><a href="/">Shelf</a><a href="/records">Make these records</a><a href="/register">Register a card</a><a href="/auth">Spotify</a></nav>
   {% block content %}{% endblock %}
 </body>
 </html>

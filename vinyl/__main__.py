@@ -4,6 +4,7 @@
   python -m vinyl auth             Spotify login from the terminal (or use the /auth web page)
   python -m vinyl devices          list Spotify Connect devices (find your raspotify)
   python -m vinyl now              show what's playing and what a card of it would hold
+  python -m vinyl history          poll play history once and list recent plays
   python -m vinyl write <link>     write a share link's URI onto the next card tapped
   python -m vinyl resolve <link>   debug: parse + look up a share link
 
@@ -19,6 +20,7 @@ import uvicorn
 
 from .config import load_config
 from .db import Database
+from .history import HistoryPoller
 from .links import parse_ref
 from .player import Player
 from .reader import make_reader
@@ -38,11 +40,13 @@ def cmd_run() -> None:
     player = Player(db, spotify, reader, sounds, scan_cooldown=cfg.scan_cooldown)
 
     if not spotify.authorized:
-        log.warning("Spotify is not authorized yet; cards will not play until you run: python -m vinyl auth")
+        log.warning("Spotify is not connected yet; cards will not play until you use the admin's Connect Spotify page (/auth)")
 
     threading.Thread(target=player.run_forever, daemon=True, name="scan-loop").start()
+    poller = HistoryPoller(db, spotify, interval=cfg.history_interval)
+    threading.Thread(target=poller.run_forever, daemon=True, name="history").start()
 
-    app = create_app(db, spotify, player, reader=reader)
+    app = create_app(db, spotify, player, reader=reader, poller=poller)
     log.info("Web admin on http://%s:%s (reader: %s)", cfg.web_host, cfg.web_port, cfg.reader_driver)
     uvicorn.run(app, host=cfg.web_host, port=cfg.web_port, log_level="warning")
 
@@ -102,6 +106,17 @@ def cmd_now() -> None:
     print(content.uri)
 
 
+def cmd_history() -> None:
+    """Poll play history once and show what's been collected."""
+    cfg = load_config()
+    db = Database(cfg.db_path)
+    poller = HistoryPoller(db, SpotifyClient(cfg))
+    new = poller.poll_once()
+    print(f"{new} new plays, {db.play_count()} total")
+    for p in db.recent_plays(10):
+        print(f"{p.played_at[:16]}  {p.track_name} - {p.artist}  ({p.album_name})")
+
+
 def cmd_write(link: str) -> None:
     cfg = load_config()
     ref = parse_ref(link)
@@ -139,6 +154,8 @@ def main() -> None:
             cmd_devices()
         elif cmd == "now":
             cmd_now()
+        elif cmd == "history":
+            cmd_history()
         elif cmd == "resolve" and len(args) > 1:
             cmd_resolve(args[1])
         elif cmd == "write" and len(args) > 1:

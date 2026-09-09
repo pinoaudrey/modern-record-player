@@ -16,6 +16,11 @@ rst_pin = 22
 # Ignore repeat reads of the same card within this many seconds
 scan_cooldown = 2.0
 
+[history]
+# How often to ask Spotify for recently played tracks, in seconds. Spotify
+# only keeps the last 50, so this needs to run often enough to catch them all.
+poll_interval = 300
+
 [web]
 host = "0.0.0.0"
 port = 8090

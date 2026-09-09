@@ -50,6 +50,7 @@
       <button>Make a record of this</button>
     </form>
   </div>
+  {% if now.note %}<p class="muted">{{ now.note }}</p>{% endif %}
   <p class="muted">Click, then hold a blank card on the reader. The card gets the Spotify URI written into it and is registered in one go.</p>
   {% elif now_error == 'not_authorized' %}
   <p>This player isn't connected to Spotify yet. <a href="/auth">Connect Spotify</a> (takes a minute, no terminal needed).</p>

@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from vinyl.db import Database
-from vinyl.spotify import ResolvedContent
+from vinyl.spotify import RecentPlay, ResolvedContent
 
 
 @dataclass
@@ -17,6 +17,11 @@ class FakeSpotify:
     authorized: bool = True
     now: ResolvedContent | None = None
     resolve_error: Exception | None = None
+    recent: list = field(default_factory=list)
+    top: list = field(default_factory=list)          # [(ResolvedContent, n)]
+    artists: list = field(default_factory=list)
+    top_error: Exception | None = None
+    resolve_calls: int = 0
 
     def authorize_url(self):
         return "https://accounts.spotify.com/authorize?client_id=x&code_challenge=y"
@@ -26,7 +31,21 @@ class FakeSpotify:
             raise ValueError("No authorization code found in what you pasted.")
         self.authorized = True
 
+    def recently_played(self, limit=50):
+        return self.recent
+
+    def top_albums(self, time_range="medium_term", limit=10):
+        if self.top_error:
+            raise self.top_error
+        return self.top
+
+    def top_artists(self, time_range="medium_term", limit=10):
+        if self.top_error:
+            raise self.top_error
+        return self.artists
+
     def resolve(self, ref):
+        self.resolve_calls += 1
         if self.resolve_error:
             raise self.resolve_error
         return ResolvedContent(

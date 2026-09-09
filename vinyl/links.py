@@ -22,6 +22,12 @@ class SpotifyRef:
         return f"spotify:{self.type}:{self.id}"
 
 
+def is_editorial_playlist(ref: SpotifyRef) -> bool:
+    """Spotify-curated playlists (Today's Top Hits, Discover Weekly, ...) share
+    an id prefix and can't be described by the API from a dev-mode app."""
+    return ref.type == "playlist" and ref.id.startswith("37i9dQZ")
+
+
 def parse_ref(text: str) -> SpotifyRef | None:
     """Accept a share URL, a bare spotify: URI, or pasted text containing either."""
     text = text.strip()

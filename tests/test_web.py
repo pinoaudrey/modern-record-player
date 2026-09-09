@@ -1,6 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from vinyl.db import Play
+from vinyl.history import HistoryPoller
 from vinyl.player import Player
 from vinyl.reader import FakeReader
 from vinyl.spotify import ResolvedContent
@@ -14,7 +16,8 @@ NOW = ResolvedContent(uri="spotify:playlist:1FIFVq4IwEPDm6sqXItXVc", content_typ
 def client(db, fake_sounds, fake_spotify):
     reader = FakeReader()
     player = Player(db, fake_spotify, reader, fake_sounds, scan_cooldown=0.0, write_timeout=0.05)
-    app = create_app(db, fake_spotify, player, reader=reader)
+    poller = HistoryPoller(db, fake_spotify)
+    app = create_app(db, fake_spotify, player, reader=reader, poller=poller)
     return TestClient(app), db, player, fake_spotify, reader
 
 
@@ -226,3 +229,33 @@ def test_dev_scan_endpoint_accepts_text(client):
     r = tc.post("/dev/scan", data={"uid": "123", "text": NOW.uri})
     assert r.json() == {"injected": "123", "text": NOW.uri}
     assert reader.poll(0.1).text == NOW.uri
+
+
+# --- make these records ------------------------------------------------------
+
+def test_records_page(client):
+    tc, db, _, spotify, _ = client
+    r = tc.get("/records")
+    assert r.status_code == 200
+    assert "No plays collected yet" in r.text
+
+    album = "spotify:album:" + "a" * 22
+    db.add_plays([Play("2026-09-08T12:00:00.000Z", "spotify:track:t", "Song", "Band", album,
+                       "Great Album", "http://art", None)])
+    spotify.top = [(ResolvedContent("spotify:album:" + "b" * 22, "album", "Top Album", "Band", None), 3)]
+    r = tc.get("/records?window=7d")
+    assert "Great Album" in r.text and "Make a record" in r.text
+    assert "Top Album" in r.text
+    assert "<strong>Last 7 days</strong>" in r.text
+
+    db.save_content_card("5", album, "album", "Great Album", "Band", None)
+    r = tc.get("/records")
+    assert "on the shelf" in r.text
+
+
+def test_index_shows_editorial_note(client):
+    tc, _, _, spotify, _ = client
+    spotify.now = ResolvedContent("spotify:album:" + "a" * 22, "album", "Album", "Band", None,
+                                  note="You're playing from a Spotify-curated playlist")
+    r = tc.get("/")
+    assert "Spotify-curated playlist" in r.text

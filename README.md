@@ -110,6 +110,12 @@ Web admin: `http://<pi-hostname>.local:8090`
   Cards written this way show an "on tag" badge. "Write to card" on any
   existing card writes its URI onto a card, so you can make copies for a
   friend's player.
+- **Make these records**: the player polls Spotify for your recently played
+  tracks every five minutes and keeps them (Spotify itself only remembers the
+  last 50). The "Make these records" page ranks the albums, playlists and
+  artists you actually play over the last week, month, or all time, alongside
+  Spotify's own top-albums and top-artists picks, and marks what's already on
+  the shelf. Every row has a "Make a record" button that arms a write.
 - A card left resting on the reader plays once. Lift it for a couple of
   seconds and put it back to start it over, like a record on the platter.
 - Control cards (play/pause, next, prev, shuffle, switch device) are assigned
@@ -122,7 +128,14 @@ the RC522 can't be shared between processes):
 ```bash
 .venv/bin/python -m vinyl now                     # what's playing, and what a card of it would hold
 .venv/bin/python -m vinyl write <spotify link>    # write that URI to the next card tapped
+.venv/bin/python -m vinyl history                 # poll play history once, list recent plays
 ```
+
+Spotify-curated playlists (Discover Weekly, Today's Top Hits, anything whose
+id starts with `37i9dQZ`) can't be looked up by an app in Spotify's
+development mode. "Make a record of this" falls back to the current album
+and says so; history shows them as "Spotify curated playlist", and a card of
+one still plays.
 
 ### Service
 
@@ -160,5 +173,8 @@ last scanned card as still resting on the reader for a few seconds, so
 
 - ~~Slice 2: write URIs onto the tags themselves (self-describing cards) and a
   "tag what's playing" flow~~ done
-- Slice 3: play-history poller, most-played reports, "make these records" list
-- Slice 4: print-ready label sheets with high-res artwork
+- ~~Slice 3: play-history poller, most-played reports, "make these records"
+  list~~ done
+- Slice 4: print-ready label sheets with high-res artwork; export/import a
+  card set for a friend's player
+- Small: device picker in the admin, visible "device not found" fallback
