@@ -123,11 +123,28 @@ def test_index_shows_now_playing(client):
     assert "Make a record of this" in r.text
 
 
-def test_index_when_not_authorized(client):
+def test_index_when_not_authorized_links_to_auth(client):
     tc, _, _, spotify, _ = client
     spotify.authorized = False
     r = tc.get("/")
-    assert "python -m vinyl auth" in r.text
+    assert 'href="/auth"' in r.text
+
+
+def test_auth_page_and_completion(client):
+    tc, _, _, spotify, _ = client
+    spotify.authorized = False
+    r = tc.get("/auth")
+    assert "accounts.spotify.com/authorize" in r.text
+    assert "won&#39;t load" in r.text or "won't load" in r.text
+
+    r = tc.post("/auth", data={"redirect_url": "garbage"})
+    assert r.status_code == 200 and "didn&#39;t work" in r.text
+    assert spotify.authorized is False
+
+    r = tc.post("/auth", data={"redirect_url": "http://127.0.0.1:8080/callback?code=AQabc"},
+                follow_redirects=False)
+    assert r.status_code == 303
+    assert spotify.authorized is True
 
 
 def test_make_record_of_now_playing(client):

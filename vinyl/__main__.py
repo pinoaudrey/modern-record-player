@@ -1,7 +1,7 @@
 """Entry points: run the player + web admin, or one-off setup commands.
 
   python -m vinyl run              start the reader loop and web admin
-  python -m vinyl auth             run the one-time Spotify PKCE authorization
+  python -m vinyl auth             Spotify login from the terminal (or use the /auth web page)
   python -m vinyl devices          list Spotify Connect devices (find your raspotify)
   python -m vinyl now              show what's playing and what a card of it would hold
   python -m vinyl write <link>     write a share link's URI onto the next card tapped
@@ -48,8 +48,11 @@ def cmd_run() -> None:
 
 
 def cmd_auth() -> None:
+    """Terminal fallback for the web page at /auth. Prints the login URL, then
+    asks for the address the browser lands on. Works over ssh."""
     cfg = load_config()
-    auth = make_auth_manager(cfg, open_browser=True)
+    print("Easier: open http://<this-pi>.local:8090/auth from any phone or laptop.\n")
+    auth = make_auth_manager(cfg, open_browser=False)
     token = auth.get_access_token()
     if token:
         print("Authorized. Token cached at .spotify_token_cache")

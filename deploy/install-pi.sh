@@ -27,7 +27,7 @@ echo "== raspotify (Spotify Connect target)"
 if ! dpkg -s raspotify >/dev/null 2>&1; then
   curl -sL https://dtcooper.github.io/raspotify/install.sh | sh
 fi
-if grep -q '^#\?LIBRESPOT_NAME=' /etc/raspotify/conf; then
+if sudo grep -q '^#\?LIBRESPOT_NAME=' /etc/raspotify/conf; then
   sudo sed -i "s|^#\?LIBRESPOT_NAME=.*|LIBRESPOT_NAME=\"$DEVICE_NAME\"|" /etc/raspotify/conf
 else
   echo "LIBRESPOT_NAME=\"$DEVICE_NAME\"" | sudo tee -a /etc/raspotify/conf >/dev/null
@@ -38,7 +38,7 @@ sudo systemctl restart raspotify
 echo "== Code"
 mkdir -p "$(dirname "$DIR")"
 if [ -d "$DIR/.git" ]; then
-  git -C "$DIR" pull --ff-only
+  git -C "$DIR" pull --ff-only || echo "git pull failed (private repo with no credentials on the Pi?), using the existing checkout"
 else
   git clone "$REPO_URL" "$DIR"
 fi
@@ -64,7 +64,11 @@ sudo systemctl restart "record-player@$USER"
 
 echo
 echo "Done. Next steps:"
-echo "  1. sudo reboot                (enables SPI)"
-echo "  2. Power off, wire the RC522   (README, RST on physical pin 22)"
-echo "  3. cd $DIR && .venv/bin/python -m vinyl auth"
+if [ -e /dev/spidev0.0 ]; then
+  echo "  1. SPI is enabled."
+else
+  echo "  1. sudo reboot                 (enables SPI)"
+fi
+echo "  2. Power off, wire the RC522    (README, RST on physical pin 22)"
+echo "  3. Connect Spotify from any phone or laptop: http://$(hostname).local:8090/auth"
 echo "  4. Admin: http://$(hostname).local:8090"

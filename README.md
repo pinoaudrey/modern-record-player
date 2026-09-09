@@ -71,13 +71,12 @@ Pi. Requirements on the Spotify dashboard app:
 - Any account that will use the player must be added under User Management
   (dev mode allows 5 users) and needs Premium for playback
 
-Then, on the Pi over ssh (it prints a URL: open it on your phone or laptop,
-log in, and paste the `http://127.0.0.1:8080/callback?code=...` address the
-browser lands on back into the terminal, even though that page won't load):
-
-```bash
-.venv/bin/python -m vinyl auth
-```
+Then open `http://recordplayer.local:8090/auth` (your Pi's hostname) from
+any phone or laptop and follow the three steps: open the Spotify login, copy
+the address of the page it lands on (it starts with
+`http://127.0.0.1:8080/callback?code=` and won't load, which is expected),
+paste it back. No terminal needed. `python -m vinyl auth` over ssh does the
+same thing in text form.
 
 Open Spotify on your phone, play anything, pick the raspotify device once so
 it shows up, then confirm the player can see it:
@@ -86,7 +85,8 @@ it shows up, then confirm the player can see it:
 .venv/bin/python -m vinyl devices
 ```
 
-Set `device_name` in `config.toml` to match.
+The install script names the raspotify device "Record Player" and sets
+`device_name` in `config.toml` to match.
 
 ## Run
 

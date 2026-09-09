@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2>Connect Spotify</h2>
+
+{% if authorized %}
+<div class="banner">This player is connected to Spotify. Use the steps below only to switch accounts.</div>
+{% endif %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<ol class="steps">
+  <li>
+    <a href="{{ url }}" target="_blank" rel="noopener"><button type="button">Open Spotify login</button></a>
+    <div class="muted">Log in with the Premium account that will play on this player, and approve the access.</div>
+  </li>
+  <li>
+    The browser then lands on a page that <strong>won't load</strong>. That's expected.
+    Copy its full address from the address bar. It starts with <code>http://127.0.0.1:8080/callback?code=</code>.
+  </li>
+  <li>
+    <form method="post" action="/auth">
+      <label>Paste that address here<br>
+        <input type="text" name="redirect_url" required autocomplete="off"
+               placeholder="http://127.0.0.1:8080/callback?code=AQ...">
+      </label>
+      <button>Connect</button>
+    </form>
+  </li>
+</ol>
+
+<p class="muted">
+  Getting "user not registered" from Spotify? The app is in Spotify's development mode, so each
+  account must first be added under User Management in the Spotify developer dashboard.
+  Keep this page open while you log in: closing the player restarts the handshake.
+</p>
+
+{% endblock %}

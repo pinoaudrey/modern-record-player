@@ -115,7 +115,7 @@ def create_app(db: Database, spotify: SpotifyClient, player: Player, reader=None
         now, now_error = now_playing()
         error = None
         if now_error == "not_authorized":
-            error = "Spotify isn't authorized on this player yet. Run: python -m vinyl auth"
+            error = "This player isn't connected to Spotify yet. Use the Connect Spotify page first."
         elif now_error:
             error = f"Couldn't reach Spotify: {now_error}"
         elif now is None:
@@ -150,6 +150,33 @@ def create_app(db: Database, spotify: SpotifyClient, player: Player, reader=None
     def register_control(uid: str = Form(...), action: str = Form(...)):
         db.save_control_card(uid.strip(), action)
         player.clear_pending(uid.strip())
+        return RedirectResponse("/", status_code=303)
+
+    # --- spotify login ------------------------------------------------------
+
+    def render_auth(request, error=None):
+        authorized = bool(getattr(spotify, "authorized", True))
+        return templates.TemplateResponse(
+            request,
+            "auth.html",
+            {
+                "authorized": authorized,
+                "url": spotify.authorize_url(),
+                "error": error,
+            },
+        )
+
+    @app.get("/auth", response_class=HTMLResponse)
+    def auth_form(request: Request):
+        return render_auth(request)
+
+    @app.post("/auth", response_class=HTMLResponse)
+    def auth_complete(request: Request, redirect_url: str = Form(...)):
+        try:
+            spotify.complete_authorization(redirect_url)
+        except Exception as e:
+            log.warning("Spotify authorization failed: %s", e)
+            return render_auth(request, error=f"That didn't work: {e}")
         return RedirectResponse("/", status_code=303)
 
     # --- writing URIs onto cards --------------------------------------------

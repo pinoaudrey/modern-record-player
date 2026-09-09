@@ -65,6 +65,20 @@ class SpotifyClient:
             log.warning("Token check failed: %s", e)
             return False
 
+    # --- authorization (PKCE, copy-paste flow that works on a headless Pi) ---
+
+    def authorize_url(self) -> str:
+        """Start a PKCE login. The same client instance must complete it."""
+        return self._auth.get_authorize_url()
+
+    def complete_authorization(self, redirect_url: str) -> None:
+        """Finish the login with the URL the browser landed on (or the bare code)."""
+        code = self._auth.parse_response_code(redirect_url.strip())
+        if not code or code.startswith("http"):
+            raise ValueError("No authorization code found in what you pasted.")
+        self._auth.get_access_token(code=code, check_cache=False)
+        self._device_id = None
+
     @property
     def sp(self) -> spotipy.Spotify:
         # Without this, spotipy would fall back to an interactive input() prompt

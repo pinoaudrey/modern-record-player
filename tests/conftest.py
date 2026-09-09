@@ -18,6 +18,14 @@ class FakeSpotify:
     now: ResolvedContent | None = None
     resolve_error: Exception | None = None
 
+    def authorize_url(self):
+        return "https://accounts.spotify.com/authorize?client_id=x&code_challenge=y"
+
+    def complete_authorization(self, redirect_url):
+        if "code=" not in redirect_url:
+            raise ValueError("No authorization code found in what you pasted.")
+        self.authorized = True
+
     def resolve(self, ref):
         if self.resolve_error:
             raise self.resolve_error

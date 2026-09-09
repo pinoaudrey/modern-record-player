@@ -52,7 +52,7 @@
   </div>
   <p class="muted">Click, then hold a blank card on the reader. The card gets the Spotify URI written into it and is registered in one go.</p>
   {% elif now_error == 'not_authorized' %}
-  <p class="muted">Spotify isn't authorized on this player yet. Run <code>python -m vinyl auth</code> on it.</p>
+  <p>This player isn't connected to Spotify yet. <a href="/auth">Connect Spotify</a> (takes a minute, no terminal needed).</p>
   {% elif now_error %}
   <p class="muted">Couldn't reach Spotify: {{ now_error }}</p>
   {% else %}
