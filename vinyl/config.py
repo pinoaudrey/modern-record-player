@@ -1,3 +1,6 @@
+import json
+import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +27,7 @@ class Config:
     # [player] tap_while_playing: "play" replaces what's on, "queue" stacks the
     # tapped card behind it (a tap while nothing is playing always plays).
     tap_while_playing: str = "play"
+    web_pin: str = ""          # [web] pin: admin login PIN; empty means no login
 
 
 def load_config(root: Path | None = None) -> Config:
@@ -56,4 +60,49 @@ def load_config(root: Path | None = None) -> Config:
         root=root,
         updates_auto=bool(raw.get("updates", {}).get("auto", True)),
         tap_while_playing=tap,
+        web_pin=str(raw["web"].get("pin", "") or "").strip(),
     )
+
+
+_SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]")
+_DEVICE_NAME_RE = re.compile(r"^\s*device_name\s*=")
+
+
+def save_device_name(path: Path, name: str) -> None:
+    """Rewrite only the `device_name = "..."` line of config.toml, keeping
+    every other byte as it was (comments, ordering, line endings). Adds the
+    line under [spotify] when there isn't one, and a [spotify] table when
+    even that is missing."""
+    path = Path(path)
+    with path.open("r", encoding="utf-8", newline="") as f:
+        lines = f.readlines()
+    newline = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+    # TOML basic strings escape the same way JSON does for anything a
+    # device name can hold (quotes, backslashes, unicode as itself).
+    new_line = f"device_name = {json.dumps(name, ensure_ascii=False)}"
+
+    section = None
+    spotify_header = None
+    for i, line in enumerate(lines):
+        m = _SECTION_RE.match(line)
+        if m:
+            section = m.group(1).strip()
+            if section == "spotify" and spotify_header is None:
+                spotify_header = i
+            continue
+        if section == "spotify" and _DEVICE_NAME_RE.match(line):
+            ending = "\r\n" if line.endswith("\r\n") else ("\n" if line.endswith("\n") else "")
+            lines[i] = new_line + ending
+            break
+    else:
+        if spotify_header is None:
+            if lines and not lines[-1].endswith(("\n", "\r\n")):
+                lines[-1] += newline
+            lines += [newline, "[spotify]" + newline, new_line + newline]
+        else:
+            lines.insert(spotify_header + 1, new_line + newline)
+
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8", newline="") as f:
+        f.writelines(lines)
+    os.replace(tmp, path)

@@ -23,8 +23,12 @@ HOT_CPU_C = 80.0
 CPU_TEMP_PATH = Path("/sys/class/thermal/thermal_zone0/temp")
 
 
-def item(label: str, value, ok: bool = True) -> dict:
-    return {"label": label, "value": str(value), "ok": bool(ok)}
+def item(label: str, value, ok: bool = True, link: str | None = None, link_text: str = "change") -> dict:
+    row = {"label": label, "value": str(value), "ok": bool(ok)}
+    if link:
+        row["link"] = link
+        row["link_text"] = link_text
+    return row
 
 
 def section(name: str, items: list[dict]) -> dict:
@@ -163,10 +167,13 @@ class Health:
             names = [d.get("name", "?") for d in devices]
             present = any(n.lower() == self.device_name.lower() for n in names)
             if present:
-                items.append(item("Device", f"{self.device_name} (in the Connect list)"))
+                items.append(item("Device", f"{self.device_name} (in the Connect list)", link="/devices"))
             else:
                 seen = ", ".join(names) if names else "no devices at all"
-                items.append(item("Device", f"{self.device_name} not in the Connect list ({seen})", False))
+                items.append(item(
+                    "Device", f"{self.device_name} not in the Connect list ({seen})", False,
+                    link="/devices", link_text="pick a device",
+                ))
             active = next((d.get("name") for d in devices if d.get("is_active")), None)
             items.append(item("Active device", active or "none"))
         except Exception as e:

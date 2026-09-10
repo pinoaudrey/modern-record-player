@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2>Playback device</h2>
+
+<p class="muted">
+  Cards play on the Spotify Connect device called <strong>{{ device_name }}</strong>.
+  Pick another one here; the choice is saved to <code>config.toml</code>.
+</p>
+
+{% if device_fallback %}
+<div class="banner warn">
+  Right now the player is using <strong>{{ device_fallback }}</strong> because
+  <strong>{{ device_name }}</strong> isn't in the Connect list. Turn the speaker on, or pick a device below.
+</div>
+{% endif %}
+
+{% if error == 'not_authorized' %}
+<p>This player isn't connected to Spotify yet. <a href="/auth">Connect Spotify</a> first.</p>
+{% elif error %}
+<div class="error">Couldn't list devices: {{ error }}</div>
+{% elif not devices %}
+<p class="muted">
+  No Spotify Connect devices right now. Open Spotify on your phone, play anything, and pick the
+  raspotify device once so it shows up; then <a href="/devices">refresh</a>.
+</p>
+{% else %}
+<table>
+  <tr><th>Device</th><th>Type</th><th></th></tr>
+  {% for d in devices %}
+  <tr>
+    <td>
+      {{ d.name }}
+      {% if d.configured %}<span class="badge" title="The device_name in config.toml">configured</span>{% endif %}
+      {% if d.active %}<span class="badge" title="Spotify is playing here right now">active</span>{% endif %}
+    </td>
+    <td class="muted">{{ d.type }}</td>
+    <td class="actions">
+      {% if not d.configured %}
+      <form class="inline" method="post" action="/devices/select">
+        <input type="hidden" name="name" value="{{ d.name }}">
+        <input type="hidden" name="next" value="/">
+        <button>Use this</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">
+  Not seeing the speaker you want? Only devices Spotify can see right now are listed.
+  <a href="/devices">Refresh</a>.
+</p>
+{% endif %}
+
+{% endblock %}

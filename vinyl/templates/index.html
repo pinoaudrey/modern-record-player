@@ -41,6 +41,13 @@
 </div>
 {% endif %}
 
+{% if device_fallback %}
+<div class="banner warn">
+  Playing on <strong>{{ device_fallback }}</strong> because <strong>{{ device_name }}</strong> wasn't found.
+  Turn the speaker on or <a href="/devices">pick a device</a>.
+</div>
+{% endif %}
+
 <section class="panel">
   <h2>Now playing</h2>
   {% if now %}

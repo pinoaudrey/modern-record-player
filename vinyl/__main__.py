@@ -65,7 +65,10 @@ def cmd_run() -> None:
         db, spotify, reader, poller, repo=cfg.root, device_name=cfg.device_name,
         updates_auto=cfg.updates_auto, backups_dir=backups_dir,
     )
-    app = create_app(db, spotify, player, reader=reader, poller=poller, health=health)
+    app = create_app(
+        db, spotify, player, reader=reader, poller=poller, health=health,
+        pin=cfg.web_pin, config_path=cfg.root / "config.toml",
+    )
     log.info("Web admin on http://%s:%s (reader: %s, version %s)",
              cfg.web_host, cfg.web_port, cfg.reader_driver, health.version)
     uvicorn.run(app, host=cfg.web_host, port=cfg.web_port, log_level="warning")

@@ -39,6 +39,11 @@ poll_interval = 300
 [web]
 host = "0.0.0.0"
 port = 8090
+# Optional admin PIN. Empty (the default) means anyone on the network can open
+# the admin. Set it to a few digits, in quotes, and every page except /health,
+# /api/health and the home-screen manifest asks for it once per phone (a
+# cookie keeps you logged in for 30 days). Changing the PIN logs everyone out.
+pin = ""
 
 [paths]
 db = "records.db"

@@ -171,6 +171,35 @@ Web admin: `http://<pi-hostname>.local:8090`
 - Sound cues go in `sounds/` (see `sounds/README.md`). Missing ones are
   generated at startup.
 
+**Playback device.** Cards play on the Spotify Connect device named by
+`device_name` in `config.toml`. When that device isn't in the Connect list
+(the speaker is off, raspotify is down) the player falls back to the first
+device Spotify can see, and the shelf says so in an orange banner: "Playing
+on X because Y wasn't found". The banner, and the Device row on the Status
+page, link to `/devices`, which lists every Connect device with the
+configured one marked and a "Use this" button on the rest. Picking one takes
+effect immediately and rewrites just the `device_name` line of
+`config.toml`, so it sticks across restarts.
+
+**Admin PIN.** The admin is open to anyone on the network by default. To lock
+it, set a PIN in `config.toml`:
+
+```toml
+[web]
+pin = "2468"
+```
+
+Every page then asks for it once per phone or laptop and stays unlocked for
+30 days (a signed cookie; "Log out" in the nav forgets it). `/health`,
+`/api/health`, the home-screen manifest and icon stay open so monitoring
+keeps working, and changing the PIN logs everyone out. A wrong guess costs a
+second, which is enough to make brute force on a four-digit PIN tedious on a
+LAN; it's a lock on the door, not a vault.
+
+**On a phone's home screen.** The admin is installable: open it in Safari
+(iOS) or Chrome (Android), choose "Add to Home Screen", and it launches
+full-screen as "Records" with a record icon, no browser chrome.
+
 CLI equivalents, handy over ssh (stop the service first if using `write`,
 the RC522 can't be shared between processes):
 
@@ -320,4 +349,5 @@ curl -X POST http://127.0.0.1:8090/dev/scan -d uid=12345 -d hold=1
   list~~ done
 - Slice 4: print-ready label sheets with high-res artwork; export/import a
   card set for a friend's player
-- Small: device picker in the admin, visible "device not found" fallback
+- ~~Small: device picker in the admin, visible "device not found" fallback~~
+  done, plus an optional admin PIN and add-to-home-screen support
