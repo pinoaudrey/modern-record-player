@@ -1,18 +1,25 @@
 """Web admin: register cards, browse the collection, make records of what's playing."""
 
+import hashlib
+import hmac
 import logging
+import secrets
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from . import updates
+from .config import save_device_name
 from .db import CONTROL_ACTIONS, CardOptions, Database
 from .history import DEFAULT_WINDOW, WINDOWS, HistoryPoller, build_report
+from .icon import render_icon
 from .links import parse_ref
 from .player import Player
 from .reader import FakeReader
@@ -22,6 +29,49 @@ from .status import Health
 log = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+# --- admin PIN (optional) ------------------------------------------------------
+# [web] pin in config.toml. Empty means no login at all. When set, every page
+# except the ones below needs a signed cookie, minted by /login.
+PIN_COOKIE = "vinyl_admin"
+PIN_COOKIE_MAX_AGE = 30 * 24 * 3600
+LOGIN_DELAY = 1.0                  # seconds to sit on a wrong PIN (tests shorten it)
+OPEN_PATHS = {"/login", "/health", "/api/health", "/manifest.webmanifest", "/icon.png"}
+OPEN_PREFIXES = ("/dev/",)
+
+# The green in base.html; also the home-screen tile and browser chrome colour.
+THEME_COLOUR = "#1db954"
+
+
+def cookie_secret(db, pin: str) -> bytes:
+    """HMAC key for the login cookie: the PIN plus a per-install random salt
+    kept in the database, so cookies survive restarts but not a PIN change."""
+    salt = db.get_meta("web_salt")
+    if not salt:
+        salt = secrets.token_hex(16)
+        db.set_meta("web_salt", salt)
+    return hashlib.sha256(f"{salt}:{pin}".encode()).digest()
+
+
+def sign_cookie(secret: bytes, expires_at: int) -> str:
+    sig = hmac.new(secret, str(expires_at).encode(), "sha256").hexdigest()
+    return f"{expires_at}.{sig}"
+
+
+def cookie_is_valid(secret: bytes, value: str | None, now: float | None = None) -> bool:
+    if not value or "." not in value:
+        return False
+    expires, sig = value.split(".", 1)
+    if not expires.isdigit() or int(expires) < (now or time.time()):
+        return False
+    return hmac.compare_digest(sign_cookie(secret, int(expires)), value)
+
+
+def safe_next(target: str | None) -> str:
+    """Only ever redirect within this site after login."""
+    if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
+        return target
+    return "/"
 
 
 def localtime(iso: str | None, fmt: str = "%b %d, %H:%M") -> str:
@@ -40,10 +90,43 @@ def localtime(iso: str | None, fmt: str = "%b %d, %H:%M") -> str:
 def create_app(
     db: Database, spotify: SpotifyClient, player: Player, reader=None,
     poller: HistoryPoller | None = None, health: Health | None = None,
+    pin: str = "", config_path: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Modern Record Player")
-    templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+    # --- device state for every page + the PIN gate (vinyl/web.py top block) ---
+    # Templates see the configured device and any fallback in use, so the
+    # shelf can show "playing on X because Y wasn't found" without each
+    # route passing it along. `config_path` is where the device picker
+    # persists its choice (None: runtime only, as in tests).
+
+    pin = (pin or "").strip()
+    secret = cookie_secret(db, pin) if pin else b""
+
+    def logged_in(request: Request) -> bool:
+        return cookie_is_valid(secret, request.cookies.get(PIN_COOKIE))
+
+    def device_context(request: Request) -> dict:
+        return {
+            "device_name": getattr(spotify, "device_name", "") or "",
+            "device_fallback": getattr(spotify, "last_fallback", None),
+            "logged_in": bool(pin) and logged_in(request),   # shows the nav's Log out
+        }
+
+    templates = Jinja2Templates(directory=str(TEMPLATES_DIR), context_processors=[device_context])
     templates.env.filters["localtime"] = localtime
+
+    if pin:
+
+        @app.middleware("http")
+        async def require_pin(request: Request, call_next):
+            path = request.url.path
+            if path in OPEN_PATHS or path.startswith(OPEN_PREFIXES) or logged_in(request):
+                return await call_next(request)
+            target = path + (f"?{request.url.query}" if request.url.query else "")
+            return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
+
+    # --- end of the top block -------------------------------------------------
 
     def status() -> dict:
         pending = player.pending_scan
@@ -390,5 +473,119 @@ def create_app(
             held = reader.held
             reader.release()
             return {"released": held}
+
+    # --- device picker, admin PIN, home-screen app (vinyl/web.py end block) ---
+
+    def device_rows() -> tuple[list[dict], str | None]:
+        """Connect devices with the configured one marked, or an error message."""
+        try:
+            if not getattr(spotify, "authorized", True):
+                return [], "not_authorized"
+            devices = spotify.list_devices()
+        except NotAuthorized:
+            return [], "not_authorized"
+        except Exception as e:
+            log.warning("Device list failed: %s", e)
+            return [], str(e)
+        wanted = (getattr(spotify, "device_name", "") or "").lower()
+        return [
+            {
+                "name": d.get("name", "?"),
+                "type": d.get("type", ""),
+                "active": bool(d.get("is_active")),
+                "configured": d.get("name", "").lower() == wanted,
+            }
+            for d in devices
+        ], None
+
+    @app.get("/devices", response_class=HTMLResponse)
+    def devices_page(request: Request):
+        rows, error = device_rows()
+        return templates.TemplateResponse(
+            request, "devices.html", {"devices": rows, "error": error},
+        )
+
+    @app.post("/devices/select")
+    def devices_select(name: str = Form(...), next_url: str = Form("/", alias="next")):
+        name = name.strip()
+        rows, error = device_rows()
+        if error == "not_authorized":
+            raise HTTPException(400, "Spotify isn't connected yet")
+        if error:
+            raise HTTPException(502, f"Couldn't list devices: {error}")
+        match = next((r["name"] for r in rows if r["name"].lower() == name.lower()), None)
+        if match is None:
+            raise HTTPException(400, f"No Spotify Connect device called {name!r} right now")
+        spotify.set_device_name(match)
+        health.device_name = match
+        if config_path is not None:
+            try:
+                save_device_name(config_path, match)
+            except OSError as e:
+                log.warning("Could not save device_name to %s: %s", config_path, e)
+        log.info("Playback device set to %r", match)
+        return RedirectResponse(safe_next(next_url), status_code=303)
+
+    # -- login / logout (only reachable when [web] pin is set; harmless otherwise)
+
+    def render_login(request, next_url="/", error=None, status_code=200):
+        return templates.TemplateResponse(
+            request, "login.html", {"next": safe_next(next_url), "error": error},
+            status_code=status_code,
+        )
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_form(request: Request, next_url: str = Query("/", alias="next")):
+        if not pin or logged_in(request):
+            return RedirectResponse(safe_next(next_url), status_code=303)
+        return render_login(request, next_url)
+
+    @app.post("/login", response_class=HTMLResponse)
+    def login(
+        request: Request, pin_entered: str = Form("", alias="pin"), next_url: str = Form("/", alias="next"),
+    ):
+        if not pin:
+            return RedirectResponse(safe_next(next_url), status_code=303)
+        if not hmac.compare_digest(pin_entered.strip().encode(), pin.encode()):
+            time.sleep(LOGIN_DELAY)
+            return render_login(request, next_url, error="That PIN isn't right.", status_code=401)
+        response = RedirectResponse(safe_next(next_url), status_code=303)
+        response.set_cookie(
+            PIN_COOKIE, sign_cookie(secret, int(time.time()) + PIN_COOKIE_MAX_AGE),
+            max_age=PIN_COOKIE_MAX_AGE, httponly=True, samesite="lax",
+        )
+        return response
+
+    @app.post("/logout")
+    def logout():
+        response = RedirectResponse("/login" if pin else "/", status_code=303)
+        response.delete_cookie(PIN_COOKIE, httponly=True, samesite="lax")
+        return response
+
+    # -- add to home screen
+
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        return JSONResponse(
+            {
+                "name": "Record Player",
+                "short_name": "Records",
+                "description": "Modern Record Player admin",
+                "start_url": "/",
+                "scope": "/",
+                "display": "standalone",
+                "theme_color": THEME_COLOUR,
+                "background_color": THEME_COLOUR,
+                "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png"}],
+            },
+            media_type="application/manifest+json",
+        )
+
+    @app.get("/icon.png")
+    def icon():
+        return Response(
+            render_icon(192), media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     return app

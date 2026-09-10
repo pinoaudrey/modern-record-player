@@ -90,6 +90,13 @@ class SpotifyClient:
         self._auth = make_auth_manager(cfg, open_browser)
         self._sp = spotipy.Spotify(auth_manager=self._auth)
         self._device_id: str | None = None
+        # Config is frozen, so the device name lives here: the admin's device
+        # picker changes it at runtime (and writes it back to config.toml).
+        self.device_name: str = cfg.device_name
+        # Name of the device actually used when `device_name` wasn't in the
+        # Connect list (we fall back to the first one). None once the
+        # configured device is found again. The admin shows this as a banner.
+        self.last_fallback: str | None = None
 
     @property
     def authorized(self) -> bool:
@@ -285,20 +292,30 @@ class SpotifyClient:
 
     # --- playback -----------------------------------------------------------
 
+    def set_device_name(self, name: str) -> None:
+        """Switch the Spotify Connect device to play on (the admin's device
+        picker). Forgets the cached id and any fallback so the next playback
+        call resolves the new name."""
+        self.device_name = name.strip()
+        self._device_id = None
+        self.last_fallback = None
+
     def device_id(self, refresh: bool = False) -> str | None:
         if self._device_id is None or refresh:
             devices = self.sp.devices().get("devices", [])
-            wanted = self._cfg.device_name.lower()
+            wanted = self.device_name.lower()
             for d in devices:
                 if d["name"].lower() == wanted:
                     self._device_id = d["id"]
+                    self.last_fallback = None
                     break
             else:
                 self._device_id = devices[0]["id"] if devices else None
+                self.last_fallback = devices[0]["name"] if devices else None
                 if self._device_id:
                     log.warning(
                         "Device %r not found, falling back to %s",
-                        self._cfg.device_name,
+                        self.device_name,
                         devices[0]["name"],
                     )
         return self._device_id

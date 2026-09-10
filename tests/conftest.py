@@ -40,6 +40,8 @@ class FakeSpotify:
     ])
     me_error: Exception | None = None
     devices_error: Exception | None = None
+    # device picker: the device actually used when device_name wasn't found
+    last_fallback: str | None = None
 
     def me(self):
         if self.me_error:
@@ -50,6 +52,11 @@ class FakeSpotify:
         if self.devices_error:
             raise self.devices_error
         return self.devices
+
+    def set_device_name(self, name):
+        self.device_name = name
+        self.last_fallback = None
+        self.calls.append(f"set_device_name:{name}")
 
     def authorize_url(self):
         return "https://accounts.spotify.com/authorize?client_id=x&code_challenge=y"

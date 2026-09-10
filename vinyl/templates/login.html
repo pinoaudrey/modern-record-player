@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  form.login { max-width: 20rem; margin: 2rem auto; text-align: center; }
+  form.login input { font-size: 1.6rem; letter-spacing: .4rem; text-align: center; min-width: 0; width: 10rem; margin-bottom: 1rem; }
+</style>
+
+<form class="login" method="post" action="/login">
+  <h2>Enter the admin PIN</h2>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <input type="password" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"
+         autofocus required aria-label="PIN">
+  <input type="hidden" name="next" value="{{ next }}">
+  <div><button>Unlock</button></div>
+  <p class="muted">Set in <code>config.toml</code> under <code>[web] pin</code>. This phone stays unlocked for 30 days.</p>
+</form>
+
+{% endblock %}

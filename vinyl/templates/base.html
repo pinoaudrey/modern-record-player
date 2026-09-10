@@ -4,6 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Modern Record Player</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="icon" type="image/png" href="/icon.png">
+  <meta name="theme-color" content="#1db954">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Records">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <style>
     :root { color-scheme: light dark; }
     body { font-family: -apple-system, system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
@@ -34,13 +41,16 @@
     nav.top a { margin-right: 1rem; }
     a button { pointer-events: none; }
     .banner.armed { background: #e67e22; display: flex; align-items: center; gap: .6rem; }
+    .banner.warn { background: #e67e22; }
+    nav.top form.logout { display: inline; float: right; }
+    nav.top form.logout button { padding: .2rem .6rem; font-size: .8rem; }
     .pulse { width: .7rem; height: .7rem; border-radius: 50%; background: #fff; animation: pulse 1s infinite; flex: none; }
     @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .2 } }
   </style>
 </head>
 <body>
   <h1><a href="/" style="text-decoration:none">&#9679; Modern Record Player</a></h1>
-  <nav class="top"><a href="/">Shelf</a><a href="/records">Make these records</a><a href="/register">Register a card</a><a href="/auth">Spotify</a><a href="/status">Status</a></nav>
+  <nav class="top"><a href="/">Shelf</a><a href="/records">Make these records</a><a href="/register">Register a card</a><a href="/auth">Spotify</a><a href="/status">Status</a>{% if logged_in %}<form class="logout" method="post" action="/logout"><button class="secondary" title="Forget this phone's login">Log out</button></form>{% endif %}</nav>
   {% block content %}{% endblock %}
 </body>
 </html>

@@ -33,7 +33,7 @@
     <tr>
       <td class="mark">{% if i.ok %}<span class="ok-mark" title="OK">&#9679;</span>{% else %}<span class="warn-mark" title="Warning">&#9650;</span>{% endif %}</td>
       <th class="label">{{ i.label }}</th>
-      <td>{{ i.value }}</td>
+      <td>{{ i.value }}{% if i.link %} &middot; <a href="{{ i.link }}">{{ i.link_text or 'change' }}</a>{% endif %}</td>
     </tr>
     {% endfor %}
   </table>
