@@ -355,3 +355,116 @@ def test_dev_scan_hold_and_release(client):
     r = tc.post("/dev/release")
     assert r.json() == {"released": "123"}
     assert reader.poll(0.01) is None
+
+
+# --- stacking, pressings, surprise me, dusty records ---------------------------
+
+def test_queue_endpoint(client):
+    tc, db, player, spotify, _ = client
+    db.save_content_card("7", "spotify:album:a", "album", "Album", None, None)
+    db.save_content_card("8", "spotify:artist:x", "artist", "Band", None, None)
+    spotify.tracks["spotify:album:a"] = ["spotify:track:a1", "spotify:track:a2"]
+    r = tc.post("/cards/7/queue", follow_redirects=False)
+    assert r.status_code == 303
+    assert spotify.queued == ["spotify:track:a1", "spotify:track:a2"]
+    assert spotify.played == []
+    assert db.get_card("7").play_count == 1
+    assert player.current_uid is None
+    r = tc.post("/cards/8/queue", follow_redirects=False)     # artists can't be queued: no crash
+    assert r.status_code == 303 and spotify.queued == ["spotify:track:a1", "spotify:track:a2"]
+    assert tc.post("/cards/nope/queue").status_code == 404
+
+    r = tc.get("/")
+    assert "/cards/7/queue" in r.text and "/cards/8/queue" not in r.text
+    assert "Surprise me" in r.text
+
+
+def test_queue_next_appears_in_control_dropdown(client):
+    tc, *_ = client
+    r = tc.get("/register?uid=1")
+    assert '<option value="queue_next">queue next</option>' in r.text
+    assert '<option value="random">random</option>' in r.text
+    r = tc.post("/register/control", data={"uid": "9", "action": "queue_next"}, follow_redirects=False)
+    assert r.status_code == 303
+
+
+def test_press_and_unpress_playlist(client):
+    tc, db, _, spotify, _ = client
+    db.save_content_card("p", "spotify:playlist:p", "playlist", "Mix", "audrey", None)
+    db.save_content_card("a", "spotify:album:a", "album", "Album", None, None)
+    spotify.tracks["spotify:playlist:p"] = [f"spotify:track:{i}" for i in range(3)]
+
+    r = tc.get("/")
+    assert ">Press<" in r.text and "Unpress" not in r.text and "/cards/a/press" not in r.text
+
+    r = tc.post("/cards/p/press", follow_redirects=False)
+    assert r.status_code == 303
+    pressing = db.get_pressing("p")
+    assert pressing.track_count == 3 and pressing.track_uris[0] == "spotify:track:0"
+
+    r = tc.get("/")
+    assert "pressed on" in r.text and "3 tracks" in r.text
+    assert ">Re-press<" in r.text and ">Unpress<" in r.text
+    assert "still holds the live playlist" in r.text
+
+    spotify.tracks["spotify:playlist:p"].append("spotify:track:new")
+    tc.post("/cards/p/press", follow_redirects=False)              # re-press picks up the change
+    assert db.get_pressing("p").track_count == 4
+
+    tc.post("/cards/p/play", follow_redirects=False)
+    assert spotify.play_uris[-1] == spotify.tracks["spotify:playlist:p"]
+
+    r = tc.post("/cards/p/unpress", follow_redirects=False)
+    assert r.status_code == 303 and db.get_pressing("p") is None
+    tc.post("/cards/p/play", follow_redirects=False)
+    assert spotify.play_uris[-1] is None
+
+
+def test_press_rejects_non_playlists_and_failures(client):
+    tc, db, _, spotify, _ = client
+    db.save_content_card("a", "spotify:album:a", "album", "Album", None, None)
+    db.save_content_card("p", "spotify:playlist:p", "playlist", "Mix", None, None)
+    assert tc.post("/cards/a/press").status_code == 400
+    assert tc.post("/cards/nope/press").status_code == 404
+    assert tc.post("/cards/nope/unpress").status_code == 404
+    assert tc.post("/cards/p/press").status_code == 400            # nothing to press
+    spotify.tracks_error = RuntimeError("timeout")
+    assert tc.post("/cards/p/press").status_code == 502
+    assert db.get_pressing("p") is None
+
+
+def test_shelf_random_endpoint(client):
+    tc, db, _, spotify, _ = client
+    r = tc.post("/shelf/random", follow_redirects=False)           # empty shelf: no crash
+    assert r.status_code == 303 and spotify.played == []
+    db.save_content_card("a", "spotify:album:a", "album", "Album", None, None)
+    r = tc.post("/shelf/random", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    assert spotify.played == ["spotify:album:a"]
+    r = tc.post("/shelf/random", data={"next": "/records"}, follow_redirects=False)
+    assert r.headers["location"] == "/records"
+    for bad in ("http://evil", "//evil.example", "records"):
+        r = tc.post("/shelf/random", data={"next": bad}, follow_redirects=False)
+        assert r.headers["location"] == "/"
+
+
+def test_records_page_shows_shelf_and_dusty(client):
+    from datetime import datetime, timedelta, timezone
+    tc, db, *_ = client
+    r = tc.get("/records")
+    assert "<strong>Shelf:</strong>" in r.text and "0 records" in r.text
+    assert "Nothing gathering dust" in r.text
+
+    db.save_content_card("d", "spotify:album:d", "album", "Dusty Album", "Band", None)
+    db.save_content_card("f", "spotify:album:f", "album", "Fresh Album", None, None)
+    old = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat(timespec="seconds")
+    db._conn.execute("UPDATE cards SET last_played_at = ?, play_count = 2 WHERE uid = 'd'", (old,))
+    db._conn.execute("UPDATE cards SET last_played_at = ?, play_count = 5 WHERE uid = 'f'",
+                     (datetime.now(timezone.utc).isoformat(timespec="seconds"),))
+    db._conn.commit()
+    r = tc.get("/records")
+    assert "2 records" in r.text and "7 plays from cards" in r.text
+    assert "most played: <strong>Fresh Album</strong> (5)" in r.text
+    assert "Dusty records" in r.text and "Dusty Album" in r.text
+    assert "/cards/d/play" in r.text and "/cards/f/play" not in r.text
+    assert "1 dusty." in r.text

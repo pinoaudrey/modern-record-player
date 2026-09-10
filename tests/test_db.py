@@ -191,7 +191,7 @@ def test_migrates_v3_database(tmp_path):
     conn.close()
 
     db = Database(path)
-    assert db.schema_version() == SCHEMA_VERSION == 4
+    assert db.schema_version() == SCHEMA_VERSION == 5
     card = db.get_card("old")
     assert card.name == "Old Album" and card.on_tag == 1
     assert card.options == CardOptions()
@@ -199,5 +199,85 @@ def test_migrates_v3_database(tmp_path):
     assert db.get_card("old").options.single is True
     db.save_position("old", "spotify:track:t", 5)
     assert db.get_position("old").position_ms == 5
+    db.close()
+    assert Database(path).schema_version() == SCHEMA_VERSION
+
+
+# --- pressings and new control actions (schema v5) ---------------------------
+
+def test_new_control_actions_are_known(db):
+    from vinyl.db import CONTROL_ACTIONS
+    assert {"queue_next", "random"} <= CONTROL_ACTIONS
+    db.save_control_card("1", "queue_next")
+    db.save_control_card("2", "random")
+    assert db.get_card("1").name == "Queue Next"
+    assert db.get_card("2").action == "random"
+
+
+def test_pressing_roundtrip(db):
+    db.save_content_card("1", "spotify:playlist:p", "playlist", "P", None, None)
+    assert db.get_pressing("1") is None
+    uris = [f"spotify:track:{i}" for i in range(3)]
+    p = db.set_pressing("1", uris)
+    assert (p.uid, p.track_uris, p.track_count) == ("1", uris, 3)
+    assert p.pressed_at
+    assert db.get_pressing("1") == p
+    assert list(db.list_pressings()) == ["1"]
+
+    p2 = db.set_pressing("1", uris[:1])          # re-press replaces
+    assert p2.track_count == 1 and db.get_pressing("1").track_uris == uris[:1]
+    db.clear_pressing("1")
+    assert db.get_pressing("1") is None
+    db.clear_pressing("1")                       # idempotent
+    assert db.list_pressings() == {}
+
+
+def test_deleting_a_card_drops_its_pressing(db):
+    db.save_content_card("1", "spotify:playlist:p", "playlist", "P", None, None)
+    db.set_pressing("1", ["spotify:track:a"])
+    db.delete_card("1")
+    assert db.get_pressing("1") is None
+
+
+def test_pressing_json_is_forgiving(db):
+    db.save_content_card("1", "spotify:playlist:p", "playlist", "P", None, None)
+    db._conn.execute("INSERT INTO pressings VALUES ('1', 'not json', '2026-01-01', 0)")
+    db._conn.commit()
+    assert db.get_pressing("1").track_uris == []
+
+
+def test_migrates_v4_database(tmp_path):
+    import sqlite3
+    from vinyl.db import SCHEMA_VERSION, Database
+
+    path = tmp_path / "v4.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE cards (
+            uid TEXT PRIMARY KEY, kind TEXT NOT NULL, uri TEXT, content_type TEXT,
+            name TEXT, artist TEXT, artwork_url TEXT, action TEXT,
+            created_at TEXT NOT NULL, last_played_at TEXT, play_count INTEGER NOT NULL DEFAULT 0,
+            on_tag INTEGER NOT NULL DEFAULT 0, options TEXT
+        );
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE plays (played_at TEXT PRIMARY KEY, track_uri TEXT NOT NULL, track_name TEXT NOT NULL,
+            artist TEXT, album_uri TEXT NOT NULL, album_name TEXT NOT NULL, artwork_url TEXT, context_uri TEXT);
+        CREATE TABLE library (uri TEXT PRIMARY KEY, content_type TEXT NOT NULL, name TEXT, artist TEXT,
+            artwork_url TEXT, available INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL);
+        CREATE TABLE positions (uid TEXT PRIMARY KEY, track_uri TEXT NOT NULL,
+            position_ms INTEGER NOT NULL DEFAULT 0, saved_at TEXT NOT NULL);
+        INSERT INTO meta VALUES ('schema_version', '4');
+        INSERT INTO cards (uid, kind, uri, content_type, name, created_at, play_count)
+            VALUES ('old', 'content', 'spotify:playlist:p', 'playlist', 'Old List', '2026-01-01', 3);
+    """)
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    assert db.schema_version() == SCHEMA_VERSION == 5
+    assert db.get_card("old").play_count == 3
+    assert db.get_pressing("old") is None
+    db.set_pressing("old", ["spotify:track:t"])
+    assert db.get_pressing("old").track_count == 1
     db.close()
     assert Database(path).schema_version() == SCHEMA_VERSION

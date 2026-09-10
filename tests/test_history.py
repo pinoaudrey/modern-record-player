@@ -96,3 +96,46 @@ def test_report_survives_spotify_failure(db, fake_spotify):
     assert report.window == "30d"
     assert report.spotify_error == "no scope"
     assert report.top_albums == []
+
+
+# --- shelf summary and dusty records ------------------------------------------
+
+def days_ago(n):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=n)).isoformat(timespec="seconds")
+
+
+def set_last_played(db, uid, when, count):
+    db._conn.execute("UPDATE cards SET last_played_at = ?, play_count = ? WHERE uid = ?",
+                     (when, count, uid))
+    db._conn.commit()
+
+
+def test_shelf_summary_and_dusty_records(db, fake_spotify):
+    from vinyl.history import DUSTY_DAYS, dusty_records, shelf_summary
+    assert shelf_summary(db) == shelf_summary(db)
+    assert shelf_summary(db).cards == 0 and shelf_summary(db).most_played is None
+    assert dusty_records(db) == []
+
+    db.save_content_card("fresh", ALBUM_A, "album", "Fresh", None, None)
+    db.save_content_card("old", ALBUM_B, "album", "Old", None, None)
+    db.save_content_card("older", PLAYLIST, "playlist", "Older", None, None)
+    db.save_content_card("never", ARTIST, "artist", "Never", None, None)
+    db.save_control_card("ctl", "next")
+    set_last_played(db, "fresh", days_ago(3), 7)
+    set_last_played(db, "old", days_ago(DUSTY_DAYS + 5), 2)
+    set_last_played(db, "older", days_ago(400), 9)
+
+    shelf = shelf_summary(db)
+    assert (shelf.cards, shelf.plays) == (4, 18)
+    assert shelf.most_played.uid == "older"
+
+    dusty = dusty_records(db)
+    assert [c.uid for c in dusty] == ["never", "older", "old"]
+    assert [c.uid for c in dusty_records(db, days=1000)] == ["never"]
+    assert [c.uid for c in dusty_records(db, days=1)] == ["never", "older", "old", "fresh"]
+
+    report = build_report(db, fake_spotify)
+    assert report.shelf == shelf
+    assert [c.uid for c in report.dusty] == ["never", "older", "old"]
+    assert report.dusty_days == DUSTY_DAYS

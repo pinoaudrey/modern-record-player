@@ -73,13 +73,21 @@
 </p>
 
 <table>
-  <tr><th></th><th>Name</th><th>Type</th><th>Plays</th><th></th></tr>
+  <tr><th></th><th>Name</th><th>Type</th><th>Plays</th>
+    <th class="actions">
+      <form class="inline" method="post" action="/shelf/random">
+        <button class="secondary" title="Play a record off the shelf at random, the longer unplayed the likelier">Surprise me</button>
+      </form>
+    </th>
+  </tr>
   {% for card in cards %}
+  {% set pressed = pressing_for(card.uid) if card.kind == 'content' else none %}
   <tr>
     <td>{% if card.artwork_url %}<img class="art" src="{{ card.artwork_url }}" alt="">{% endif %}</td>
     <td>
       {{ card.name or card.uid }}
       {% if card.on_tag %}<span class="badge" title="The card's own memory holds this URI, so it plays on any player">on tag</span>{% endif %}
+      {% if pressed %}<span class="badge" title="This card plays the playlist as it was on this date, not the live one. The card's tag still holds the live playlist, so on another player it plays the live version.">pressed on {{ pressed.pressed_at | localtime('%b %d, %Y') }}, {{ pressed.track_count }} track{{ '' if pressed.track_count == 1 else 's' }}</span>{% endif %}
       {% if card.artist %}<div class="muted">{{ card.artist }}</div>{% endif %}
       <div class="muted"><code>{{ card.uid }}</code></div>
     </td>
@@ -88,12 +96,27 @@
     <td class="actions">
       {% if card.kind == 'content' %}
       <form class="inline" method="post" action="/cards/{{ card.uid }}/play"><button>Play</button></form>
+      {% if card.content_type != 'artist' %}
+      <form class="inline" method="post" action="/cards/{{ card.uid }}/queue">
+        <button class="secondary" title="Stack this record behind what's playing instead of replacing it">Queue</button>
+      </form>
+      {% endif %}
       <form class="inline" method="post" action="/cards/{{ card.uid }}/restart">
         <button class="secondary" title="Play from the top and forget any saved position">Restart</button>
       </form>
       <form class="inline" method="post" action="/cards/{{ card.uid }}/write">
         <button class="secondary" title="Write this URI onto a card (this one, or a copy)">Write to card</button>
       </form>
+      {% if card.content_type == 'playlist' %}
+      <form class="inline" method="post" action="/cards/{{ card.uid }}/press">
+        <button class="secondary" title="Freeze the playlist's track list as it is right now, so this card keeps playing the same songs even when the playlist changes">{{ 'Re-press' if pressed else 'Press' }}</button>
+      </form>
+      {% if pressed %}
+      <form class="inline" method="post" action="/cards/{{ card.uid }}/unpress">
+        <button class="secondary" title="Back to the live playlist">Unpress</button>
+      </form>
+      {% endif %}
+      {% endif %}
       {% endif %}
       <form class="inline" method="post" action="/cards/{{ card.uid }}/delete"
             onsubmit="return confirm('Delete this card?')">

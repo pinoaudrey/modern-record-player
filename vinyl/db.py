@@ -5,9 +5,13 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-CONTROL_ACTIONS = {"play_pause", "next", "prev", "shuffle", "switch_device"}
+CONTROL_ACTIONS = {
+    "play_pause", "next", "prev", "shuffle", "switch_device",
+    "queue_next",   # the next content card tapped is queued instead of played
+    "random",       # surprise me: play a content card, the dustier the likelier
+}
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS cards (
@@ -56,17 +60,25 @@ CREATE TABLE IF NOT EXISTS positions (
     position_ms INTEGER NOT NULL DEFAULT 0,
     saved_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pressings (
+    uid TEXT PRIMARY KEY,
+    track_uris TEXT NOT NULL,
+    pressed_at TEXT NOT NULL,
+    track_count INTEGER NOT NULL DEFAULT 0
+);
 """
 
 _STATEMENTS = [stmt.strip() for stmt in _SCHEMA.split(";") if stmt.strip()]
 _PLAYS_DDL = [stmt for stmt in _STATEMENTS if "plays" in stmt or "library" in stmt]
 _POSITIONS_DDL = [stmt for stmt in _STATEMENTS if "positions" in stmt]
+_PRESSINGS_DDL = [stmt for stmt in _STATEMENTS if "pressings" in stmt]
 
 # version -> statements that bring a database from version-1 up to version
 _MIGRATIONS: dict[int, list[str]] = {
     2: ["ALTER TABLE cards ADD COLUMN on_tag INTEGER NOT NULL DEFAULT 0"],
     3: _PLAYS_DDL,  # CREATE IF NOT EXISTS, harmless on a fresh database
     4: ["ALTER TABLE cards ADD COLUMN options TEXT", *_POSITIONS_DDL],
+    5: _PRESSINGS_DDL,
 }
 
 
@@ -122,6 +134,15 @@ class Position:
     track_uri: str
     position_ms: int
     saved_at: str
+
+
+@dataclass(frozen=True)
+class Pressing:
+    """A playlist card's track list, frozen at the moment it was pressed."""
+    uid: str
+    track_uris: list[str]
+    pressed_at: str
+    track_count: int
 
 
 @dataclass(frozen=True)
@@ -268,6 +289,7 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM cards WHERE uid = ?", (uid,))
             self._conn.execute("DELETE FROM positions WHERE uid = ?", (uid,))
+            self._conn.execute("DELETE FROM pressings WHERE uid = ?", (uid,))
             self._conn.commit()
 
     def record_play(self, uid: str) -> None:
@@ -302,6 +324,34 @@ class Database:
     def list_positions(self) -> dict[str, Position]:
         rows = self._conn.execute("SELECT * FROM positions").fetchall()
         return {r["uid"]: Position(**{k: r[k] for k in r.keys()}) for r in rows}
+
+    # --- pressings (frozen playlist track lists) ----------------------------
+
+    def set_pressing(self, uid: str, uris: list[str]) -> Pressing:
+        """Freeze `uris` as the card's track list. Re-pressing replaces it."""
+        uris = list(uris)
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO pressings (uid, track_uris, pressed_at, track_count)
+                   VALUES (?, ?, ?, ?)""",
+                (uid, json.dumps(uris), _now(), len(uris)),
+            )
+            self._conn.commit()
+        return self.get_pressing(uid)
+
+    def get_pressing(self, uid: str) -> Pressing | None:
+        row = self._conn.execute("SELECT * FROM pressings WHERE uid = ?", (uid,)).fetchone()
+        return _to_pressing(row) if row else None
+
+    def clear_pressing(self, uid: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM pressings WHERE uid = ?", (uid,))
+            self._conn.commit()
+
+    def list_pressings(self) -> dict[str, Pressing]:
+        """uid -> pressing, for the shelf's "pressed on ..." badges."""
+        rows = self._conn.execute("SELECT * FROM pressings").fetchall()
+        return {r["uid"]: _to_pressing(r) for r in rows}
 
     # --- meta ---------------------------------------------------------------
 
@@ -396,6 +446,17 @@ class Database:
                 (uri, content_type, name, artist, artwork_url, int(available), _now()),
             )
             self._conn.commit()
+
+
+def _to_pressing(row: sqlite3.Row) -> Pressing:
+    try:
+        uris = json.loads(row["track_uris"])
+    except ValueError:
+        uris = []
+    if not isinstance(uris, list):
+        uris = []
+    return Pressing(uid=row["uid"], track_uris=[str(u) for u in uris],
+                    pressed_at=row["pressed_at"], track_count=row["track_count"])
 
 
 def _to_card(row: sqlite3.Row) -> Card:

@@ -8,9 +8,9 @@ records": what you play a lot but haven't got a card for.
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .db import Database, Play, PlayCount, since_days
+from .db import Card, Database, Play, PlayCount, since_days
 from .links import is_editorial_playlist, parse_ref
 from .spotify import ResolvedContent, SpotifyClient
 
@@ -25,6 +25,7 @@ WINDOWS = {
     "all": ("All time", None, "long_term"),
 }
 DEFAULT_WINDOW = "30d"
+DUSTY_DAYS = 60     # a content card unplayed for this long (or ever) is a dusty record
 
 
 class HistoryPoller:
@@ -74,6 +75,15 @@ class Suggestion:
     has_card: bool
 
 
+@dataclass(frozen=True)
+class ShelfSummary:
+    """The shelf in one line: how many records, how often they've been played
+    from the reader/admin (cards' play_count), and the favourite."""
+    cards: int
+    plays: int
+    most_played: Card | None
+
+
 @dataclass
 class Report:
     window: str
@@ -84,6 +94,27 @@ class Report:
     top_albums: list[Suggestion]    # Spotify's own ranking
     top_artists: list[Suggestion]
     spotify_error: str | None = None
+    shelf: ShelfSummary = ShelfSummary(0, 0, None)
+    dusty: list[Card] = field(default_factory=list)   # unplayed for DUSTY_DAYS+, oldest first
+    dusty_days: int = DUSTY_DAYS
+
+
+def shelf_summary(db: Database) -> ShelfSummary:
+    cards = [c for c in db.list_cards() if c.kind == "content"]
+    played = [c for c in cards if c.play_count > 0]
+    most = max(played, key=lambda c: (c.play_count, c.last_played_at or ""), default=None)
+    return ShelfSummary(cards=len(cards), plays=sum(c.play_count for c in cards), most_played=most)
+
+
+def dusty_records(db: Database, days: int = DUSTY_DAYS) -> list[Card]:
+    """Content cards not played in `days` days, or never. Never-played cards
+    come first (they're the dustiest), then the longest-unplayed."""
+    cutoff = since_days(days)
+    dusty = [
+        c for c in db.list_cards()
+        if c.kind == "content" and (not c.last_played_at or c.last_played_at < cutoff)
+    ]
+    return sorted(dusty, key=lambda c: (c.last_played_at is not None, c.last_played_at or "", c.name or ""))
 
 
 def describe_context(db: Database, spotify: SpotifyClient, pc: PlayCount) -> ResolvedContent:
@@ -147,4 +178,5 @@ def build_report(db: Database, spotify: SpotifyClient, window: str = DEFAULT_WIN
         window=window, label=label, plays_in_window=db.play_count(since),
         albums=albums, contexts=contexts, top_albums=top_albums, top_artists=top_artists,
         spotify_error=spotify_error,
+        shelf=shelf_summary(db), dusty=dusty_records(db),
     )

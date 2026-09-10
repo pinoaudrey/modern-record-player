@@ -31,6 +31,12 @@ class FakeSpotify:
     play_kwargs: list = field(default_factory=list)   # (uri, position_ms, track_uri) per play()
     shuffle_calls: list = field(default_factory=list)
     playback_error: Exception | None = None       # raised by the playback-state calls
+    # stacking and pressings
+    tracks: dict = field(default_factory=dict)    # album/playlist uri -> [track uris] (content_tracks)
+    tracks_error: Exception | None = None         # raised by content_tracks()
+    queued: list = field(default_factory=list)    # track uris passed to queue(), in order
+    queue_error: Exception | None = None
+    play_uris: list = field(default_factory=list) # the `uris` list of each play() call (None = live context)
 
     # status page: account + Spotify Connect device list
     device_name: str = "Record Player"
@@ -84,17 +90,36 @@ class FakeSpotify:
     def now_playing_content(self):
         return self.now
 
-    def play(self, uri, position_ms=None, track_uri=None):
+    def play(self, uri, position_ms=None, track_uri=None, uris=None):
         self.played.append(uri)
         self.play_kwargs.append((uri, position_ms, track_uri))
+        self.play_uris.append(list(uris) if uris else None)
         self.playing = True
         self.nothing_loaded = False
         self.position_ms = position_ms or 0
-        if uri.startswith("spotify:track:"):
+        if uris:
+            # a track list plays without a context, like the real API
+            self.context_uri = None
+            self.track_uri = track_uri if track_uri in uris else uris[0]
+        elif uri.startswith("spotify:track:"):
             self.track_uri, self.context_uri = uri, None
         else:
             self.context_uri = uri
             self.track_uri = track_uri or f"spotify:track:first-of-{uri.split(':')[-1]}"
+
+    def queue(self, uri):
+        if self.queue_error:
+            raise self.queue_error
+        self.queued.append(uri)
+
+    def content_tracks(self, uri, limit=50):
+        if self.tracks_error:
+            raise self.tracks_error
+        if uri.startswith("spotify:track:"):
+            return [uri]
+        if uri.startswith("spotify:artist:"):
+            raise ValueError("artist cards have no track list")
+        return list(self.tracks.get(uri, []))[:limit]
 
     def _check(self):
         if self.playback_error:

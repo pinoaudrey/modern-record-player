@@ -24,6 +24,10 @@ class NotAuthorized(RuntimeError):
     pass
 
 
+MAX_PLAY_URIS = 200      # start_playback accepts a list of track uris; keep it sane
+PAGE = 50                # album_tracks page size (playlist_items allows 100)
+
+
 @dataclass(frozen=True)
 class ResolvedContent:
     uri: str
@@ -303,16 +307,31 @@ class SpotifyClient:
                     )
         return self._device_id
 
-    def play(self, uri: str, position_ms: int | None = None, track_uri: str | None = None) -> None:
+    def play(
+        self, uri: str, position_ms: int | None = None, track_uri: str | None = None,
+        uris: list[str] | None = None,
+    ) -> None:
         """Start `uri` on the player's device. With `position_ms` (and, for
         albums/playlists, the `track_uri` to start at) playback picks up
-        where a card left off. Artist contexts can't take an offset."""
+        where a card left off. Artist contexts can't take an offset.
+
+        With `uris` (a pressing: the card's frozen track list) those tracks
+        are played instead of the live context, at most MAX_PLAY_URIS of
+        them; `track_uri`/`position_ms` still pick the starting point."""
         device = self.device_id()
         if device is None:
             raise RuntimeError("No Spotify Connect devices available")
         kwargs: dict = {}
         if position_ms:
             kwargs["position_ms"] = int(position_ms)
+        if uris:
+            uris = list(uris)[:MAX_PLAY_URIS]
+            if track_uri and track_uri in uris:
+                kwargs["offset"] = {"uri": track_uri}
+            elif "position_ms" in kwargs:
+                del kwargs["position_ms"]
+            self.sp.start_playback(device_id=device, uris=uris, **kwargs)
+            return
         if uri.startswith("spotify:track:"):
             self.sp.start_playback(device_id=device, uris=[uri], **kwargs)
             return
@@ -321,6 +340,46 @@ class SpotifyClient:
         elif "position_ms" in kwargs and not track_uri:
             del kwargs["position_ms"]  # a position without a track is meaningless
         self.sp.start_playback(device_id=device, context_uri=uri, **kwargs)
+
+    def queue(self, uri: str) -> None:
+        """Add one track to the end of the queue on the player's device."""
+        device = self.device_id()
+        if device is None:
+            raise RuntimeError("No Spotify Connect devices available")
+        self.sp.add_to_queue(uri, device_id=device)
+
+    def content_tracks(self, uri: str, limit: int = 50) -> list[str]:
+        """The track uris a card holds, in order: the track itself, an album's
+        tracks, or a playlist's current items, at most `limit` of them.
+        Artists have no fixed track list. Local files and episodes are skipped."""
+        ref = parse_ref(uri)
+        if ref is None:
+            raise ValueError(f"not a Spotify uri: {uri}")
+        if ref.type == "track":
+            return [ref.uri]
+        if ref.type == "artist":
+            raise ValueError("artist cards have no track list")
+        out: list[str] = []
+        offset = 0
+        while len(out) < limit:
+            want = min(limit - len(out), PAGE if ref.type == "album" else 100)
+            if ref.type == "album":
+                page = self.sp.album_tracks(ref.id, limit=want, offset=offset)
+                items = [t for t in page.get("items", [])]
+            else:
+                page = self.sp.playlist_items(
+                    ref.id, fields="items(track(uri,type)),next", limit=want, offset=offset,
+                )
+                items = [(it or {}).get("track") for it in page.get("items", [])]
+            for t in items:
+                u = (t or {}).get("uri")
+                if u and u.startswith("spotify:track:"):
+                    out.append(u)
+            got = len(page.get("items", []))
+            offset += got
+            if got == 0 or not page.get("next"):
+                break
+        return out[:limit]
 
     def current_track(self) -> CurrentTrack | None:
         """What's on right now, or None when nothing is loaded on any device."""

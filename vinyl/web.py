@@ -298,6 +298,56 @@ def create_app(
         db.set_card_options(uid, options_from_form(single, resume, shuffle))
         return RedirectResponse("/", status_code=303)
 
+    # --- records: stacking, pressings, surprise me (vinyl/player.py, vinyl/db.py) ---
+    # Kept in one block, separate from the card routes above.
+
+    templates.env.globals["pressing_for"] = db.get_pressing
+
+    def content_card(uid: str):
+        card = db.get_card(uid)
+        if card is None or card.kind != "content":
+            raise HTTPException(404)
+        return card
+
+    @app.post("/cards/{uid}/queue")
+    def queue_card(uid: str):
+        """Stack this record behind whatever is playing."""
+        player.queue_card(content_card(uid))
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/cards/{uid}/press")
+    def press_card(uid: str):
+        """Freeze a playlist card's track list as it is right now (re-pressing
+        replaces an earlier pressing). The tag still holds the live playlist."""
+        card = content_card(uid)
+        if card.content_type != "playlist":
+            raise HTTPException(400, "Only playlist cards can be pressed")
+        try:
+            uris = spotify.content_tracks(card.uri, limit=200)
+        except NotAuthorized:
+            raise HTTPException(409, "Spotify isn't connected yet")
+        except Exception as e:
+            log.warning("Could not press %s: %s", card.name, e)
+            raise HTTPException(502, f"Couldn't fetch the playlist's tracks: {e}")
+        if not uris:
+            raise HTTPException(400, "That playlist has no playable tracks to press")
+        db.set_pressing(uid, uris)
+        log.info("Pressed %s: %d tracks", card.name, len(uris))
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/cards/{uid}/unpress")
+    def unpress_card(uid: str):
+        content_card(uid)
+        db.clear_pressing(uid)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/shelf/random")
+    def shelf_random(next: str = Form("/")):
+        """Surprise me: play a record off the shelf, the dustier the likelier."""
+        player.play_random()
+        local = next.startswith("/") and not next.startswith("//")   # same-site paths only
+        return RedirectResponse(next if local else "/", status_code=303)
+
     # --- api ----------------------------------------------------------------
 
     @app.get("/api/status")

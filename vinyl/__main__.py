@@ -47,7 +47,7 @@ def cmd_run() -> None:
     player = Player(
         db, spotify, reader, sounds, scan_cooldown=cfg.scan_cooldown,
         lift_to_pause=cfg.lift_to_pause, lift_timeout=cfg.lift_timeout,
-        resume_window=cfg.resume_window,
+        resume_window=cfg.resume_window, tap_while_playing=cfg.tap_while_playing,
     )
 
     if not spotify.authorized:

@@ -566,3 +566,267 @@ def test_write_request_carries_options(db, fake_spotify, fake_sounds):
     reader.inject("55")
     player.handle_scan(reader.poll(0.1))
     assert db.get_card("55").options == CardOptions(single=True, shuffle=False)
+
+
+# --- stacking records: queue next, queue mode ---------------------------------
+
+def queue_player(db, fake_spotify, fake_sounds, clock=None, **kw):
+    kw.setdefault("tap_while_playing", "play")
+    return Player(db, fake_spotify, FakeReader(), fake_sounds, scan_cooldown=0.0,
+                  write_timeout=0.05, **kw)
+
+
+def test_queue_next_card_queues_the_next_card_tapped(db, fake_spotify, fake_sounds):
+    db.save_control_card("q", "queue_next")
+    db.save_content_card("42", "spotify:album:a", "album", "A", None, None)
+    db.save_content_card("43", "spotify:track:t", "track", "T", None, None)
+    fake_spotify.tracks["spotify:album:a"] = ["spotify:track:a1", "spotify:track:a2"]
+    player = queue_player(db, fake_spotify, fake_sounds)
+    player.handle_scan("43")                    # something is playing
+    assert fake_spotify.played == ["spotify:track:t"]
+
+    player.handle_scan("q")
+    assert player.queue_armed
+    assert fake_sounds.played[-1] == "accept"
+    player.handle_scan("42")
+    assert fake_spotify.queued == ["spotify:track:a1", "spotify:track:a2"]
+    assert fake_spotify.played == ["spotify:track:t"]      # not replaced
+    assert not player.queue_armed                          # one shot
+    assert db.get_card("42").play_count == 1               # still counts as a play
+    assert fake_sounds.played[-1] == "accept"
+
+    player.handle_scan("42")                    # next tap plays as usual
+    assert fake_spotify.played == ["spotify:track:t", "spotify:album:a"]
+    assert fake_spotify.queued == ["spotify:track:a1", "spotify:track:a2"]
+
+
+def test_queued_card_never_becomes_current(db, fake_spotify, fake_sounds, clock):
+    db.save_control_card("q", "queue_next")
+    db.save_content_card("42", "spotify:album:a", "album", "A", None, None)
+    db.save_content_card("43", "spotify:track:t", "track", "T", None, None)
+    player = lift_player(db, fake_spotify, fake_sounds)
+    player.handle_scan("42")                    # on the platter
+    player.handle_scan("q")
+    player.handle_scan("43")                    # queued, tapped and taken away
+    assert fake_spotify.queued == ["spotify:track:t"]
+    assert player.current_uid == "42"
+    rest(player, clock, "42", 3.0)              # 42 still resting: nothing pauses
+    assert fake_spotify.calls == []
+    lift(player, clock, 2.0)                    # lifting the platter card still pauses
+    assert fake_spotify.calls == ["pause"]
+
+
+def test_queue_arm_times_out(db, fake_spotify, fake_sounds, clock):
+    db.save_control_card("q", "queue_next")
+    db.save_content_card("42", "spotify:album:a", "album", "A", None, None)
+    player = queue_player(db, fake_spotify, fake_sounds)
+    player.handle_scan("q")
+    clock[0] += 29
+    assert player.queue_armed
+    clock[0] += 2
+    assert not player.queue_armed
+    player.handle_scan("42")
+    assert fake_spotify.played == ["spotify:album:a"] and fake_spotify.queued == []
+
+
+def test_queue_track_card_and_pressed_playlist(db, fake_spotify, fake_sounds):
+    from vinyl.player import QUEUE_TRACK_LIMIT
+    db.save_content_card("t", "spotify:track:one", "track", "One", None, None)
+    db.save_content_card("p", "spotify:playlist:p", "playlist", "P", None, None)
+    fake_spotify.tracks["spotify:playlist:p"] = ["spotify:track:live"]
+    db.set_pressing("p", [f"spotify:track:pressed{i}" for i in range(QUEUE_TRACK_LIMIT + 5)])
+    player = queue_player(db, fake_spotify, fake_sounds)
+    assert player.queue_card(db.get_card("t"))
+    assert fake_spotify.queued == ["spotify:track:one"]
+    assert player.queue_card(db.get_card("p"))
+    assert fake_spotify.queued[1:] == [f"spotify:track:pressed{i}" for i in range(QUEUE_TRACK_LIMIT)]
+    assert "spotify:track:live" not in fake_spotify.queued
+    assert db.get_card("p").play_count == 1
+
+
+def test_artist_cards_cannot_be_queued(db, fake_spotify, fake_sounds):
+    db.save_control_card("q", "queue_next")
+    db.save_content_card("ar", "spotify:artist:x", "artist", "Band", None, None)
+    player = queue_player(db, fake_spotify, fake_sounds)
+    player.handle_scan("q")
+    player.handle_scan("ar")
+    assert fake_spotify.queued == [] and fake_spotify.played == []
+    assert fake_sounds.played[-1] == "error"
+    assert db.get_card("ar").play_count == 0
+    assert not player.queue_armed                # the arm was used up
+
+
+def test_empty_track_list_is_an_error_cue(db, fake_spotify, fake_sounds):
+    db.save_content_card("p", "spotify:playlist:empty", "playlist", "Empty", None, None)
+    player = queue_player(db, fake_spotify, fake_sounds)
+    assert player.queue_card(db.get_card("p")) is False
+    assert fake_sounds.played == ["error"]
+    assert db.get_card("p").play_count == 0
+
+
+def test_queue_mode_queues_while_playing_and_plays_when_quiet(db, fake_spotify, fake_sounds):
+    db.save_content_card("42", "spotify:album:a", "album", "A", None, None)
+    db.save_content_card("43", "spotify:album:b", "album", "B", None, None)
+    fake_spotify.tracks["spotify:album:b"] = ["spotify:track:b1"]
+    player = queue_player(db, fake_spotify, fake_sounds, tap_while_playing="queue")
+    player.handle_scan("42")                    # nothing was playing: plays
+    assert fake_spotify.played == ["spotify:album:a"]
+    player.handle_scan("43")                    # something is: queued
+    assert fake_spotify.queued == ["spotify:track:b1"]
+    assert fake_spotify.played == ["spotify:album:a"]
+
+    fake_spotify.playing = False                # paused from the phone
+    player.handle_scan("43")
+    assert fake_spotify.played == ["spotify:album:a", "spotify:album:b"]
+
+
+def test_queue_mode_replays_the_platter_card_after_the_window(db, fake_spotify, fake_sounds, clock):
+    db.save_content_card("42", "spotify:album:a", "album", "A", None, None)
+    fake_spotify.tracks["spotify:album:a"] = ["spotify:track:a1"]
+    player = lift_player(db, fake_spotify, fake_sounds, tap_while_playing="queue")
+    player.handle_scan("42")
+    lift(player, clock, 2.0)
+    assert fake_spotify.calls == ["pause"]
+    fake_spotify.playing = True                 # the phone resumed meanwhile
+    clock[0] += 1000                            # back after the window: the card itself, so it plays
+    player.handle_scan("42")
+    assert fake_spotify.queued == []
+    assert fake_spotify.played == ["spotify:album:a"] * 2
+
+
+def test_queue_mode_falls_back_to_playing_when_spotify_is_unreachable(db, fake_spotify, fake_sounds):
+    db.save_content_card("42", "spotify:album:a", "album", "A", None, None)
+    player = queue_player(db, fake_spotify, fake_sounds, tap_while_playing="queue")
+    fake_spotify.playing = True
+    fake_spotify.playback_error = RuntimeError("offline")
+    player.handle_scan("42")
+    assert fake_spotify.played == ["spotify:album:a"] and fake_spotify.queued == []
+
+
+# --- pressings -----------------------------------------------------------------
+
+def test_pressed_card_plays_its_frozen_track_list(db, fake_spotify, fake_sounds):
+    db.save_content_card("p", "spotify:playlist:p", "playlist", "P", None, None)
+    uris = ["spotify:track:x", "spotify:track:y"]
+    db.set_pressing("p", uris)
+    player = make_player(db, fake_spotify, fake_sounds)
+    player.handle_scan("p")
+    assert fake_spotify.play_uris == [uris]
+    assert fake_spotify.played == ["spotify:playlist:p"]
+    assert fake_spotify.track_uri == "spotify:track:x" and fake_spotify.context_uri is None
+
+    db.clear_pressing("p")
+    player.handle_scan("p")
+    assert fake_spotify.play_uris == [uris, None]        # back to the live playlist
+
+
+def test_pressed_card_resumes_within_its_track_list(db, fake_spotify, fake_sounds, clock):
+    from vinyl.db import CardOptions
+    db.save_content_card("p", "spotify:playlist:p", "playlist", "P", None, None,
+                         options=CardOptions(resume=True))
+    db.save_content_card("43", "spotify:album:b", "album", "B", None, None)
+    uris = ["spotify:track:x", "spotify:track:y", "spotify:track:z"]
+    db.set_pressing("p", uris)
+    player = lift_player(db, fake_spotify, fake_sounds)
+    player.handle_scan("p")
+    fake_spotify.track_uri, fake_spotify.position_ms = "spotify:track:y", 40000
+    lift(player, clock, 2.0)                    # no context to compare, but the track is ours
+    pos = db.get_position("p")
+    assert (pos.track_uri, pos.position_ms) == ("spotify:track:y", 40000)
+
+    player.handle_scan("43")
+    clock[0] += 3600
+    player.handle_scan("p")
+    assert fake_spotify.play_kwargs[-1] == ("spotify:playlist:p", 40000, "spotify:track:y")
+    assert fake_spotify.play_uris[-1] == uris
+    assert fake_spotify.track_uri == "spotify:track:y"
+
+
+def test_pressed_card_position_not_saved_when_phone_moved_on(db, fake_spotify, fake_sounds, clock):
+    from vinyl.db import CardOptions
+    db.save_content_card("p", "spotify:playlist:p", "playlist", "P", None, None,
+                         options=CardOptions(resume=True))
+    db.set_pressing("p", ["spotify:track:x"])
+    player = lift_player(db, fake_spotify, fake_sounds)
+    player.handle_scan("p")
+    fake_spotify.track_uri = "spotify:track:something-else"
+    lift(player, clock, 2.0)
+    assert db.get_position("p") is None
+
+
+def test_pressed_single_stops_after_its_tracks(db, fake_spotify, fake_sounds, clock):
+    from vinyl.db import CardOptions
+    db.save_content_card("p", "spotify:playlist:p", "playlist", "P", None, None,
+                         options=CardOptions(single=True))
+    db.set_pressing("p", ["spotify:track:x", "spotify:track:y"])
+    player = lift_player(db, fake_spotify, fake_sounds)
+    player.handle_scan("p")
+    rest(player, clock, "p", 10.0)
+    fake_spotify.track_uri = "spotify:track:y"           # still on the pressing
+    rest(player, clock, "p", 10.0)
+    assert fake_spotify.calls == []
+    fake_spotify.track_uri = "spotify:track:autoplay"    # off the end
+    rest(player, clock, "p", 6.0)
+    assert fake_spotify.calls == ["pause"]
+
+
+# --- surprise me ---------------------------------------------------------------
+
+def days_ago(n):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=n)).isoformat(timespec="seconds")
+
+
+def set_last_played(db, uid, when, count=1):
+    db._conn.execute("UPDATE cards SET last_played_at = ?, play_count = ? WHERE uid = ?",
+                     (when, count, uid))
+    db._conn.commit()
+
+
+def test_random_weights_by_staleness(db, fake_spotify, fake_sounds):
+    import random
+    db.save_content_card("fresh", "spotify:album:f", "album", "Fresh", None, None)
+    db.save_content_card("stale", "spotify:album:s", "album", "Stale", None, None)
+    db.save_content_card("never", "spotify:album:n", "album", "Never", None, None)
+    db.save_control_card("c", "next")
+    set_last_played(db, "fresh", days_ago(0))
+    set_last_played(db, "stale", days_ago(99))
+
+    class Rng(random.Random):
+        def choices(self, population, weights=None, *, cum_weights=None, k=1):
+            self.seen = dict(zip([c.uid for c in population], weights))
+            return [population[0]]
+
+    rng = Rng()
+    player = Player(db, fake_spotify, FakeReader(), fake_sounds, scan_cooldown=0.0, rng=rng)
+    player.pick_random()
+    assert rng.seen["fresh"] == pytest.approx(1.0, abs=0.01)
+    assert rng.seen["stale"] == pytest.approx(100.0, abs=0.01)
+    assert rng.seen["never"] == rng.seen["stale"]   # never played: the biggest weight on the shelf
+    assert "c" not in rng.seen                  # control cards aren't records
+
+
+def test_random_control_card_plays_a_record(db, fake_spotify, fake_sounds):
+    import random
+    db.save_content_card("a", "spotify:album:a", "album", "A", None, None)
+    db.save_content_card("b", "spotify:album:b", "album", "B", None, None)
+    db.save_control_card("r", "random")
+    rng = random.Random(7)
+    player = Player(db, fake_spotify, FakeReader(), fake_sounds, scan_cooldown=0.0, rng=rng)
+    expected = random.Random(7).choices(["a", "b"], weights=[1.0, 1.0], k=1)[0]
+    player.handle_scan("r")
+    assert fake_spotify.played == [f"spotify:album:{expected}"]
+    assert db.get_card(expected).play_count == 1
+    assert player.current_uid is None           # not on the reader
+
+    picks = {player.play_random().uid for _ in range(40)}
+    assert picks == {"a", "b"}                  # both get a turn eventually
+
+
+def test_random_with_empty_shelf_is_an_error_cue(db, fake_spotify, fake_sounds):
+    db.save_control_card("r", "random")
+    player = make_player(db, fake_spotify, fake_sounds)
+    player.handle_scan("r")
+    assert fake_spotify.played == []
+    assert fake_sounds.played[-1] == "error"
+    assert player.play_random() is None

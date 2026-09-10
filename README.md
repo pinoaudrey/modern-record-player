@@ -133,8 +133,38 @@ Web admin: `http://<pi-hostname>.local:8090`
   "paused at 1:23" next to such a card, and its *Restart* button plays from
   the top and forgets the position. *Shuffle* sets shuffle on or off before
   the card plays, or leaves it as it is.
-- Control cards (play/pause, next, prev, shuffle, switch device) are assigned
-  the same way from the register page.
+- **Stack records**: a *queue next* control card arms the player for
+  30 seconds: the next content card tapped is added to Spotify's queue behind
+  what's playing instead of replacing it (the player chirps when armed and
+  again when the card is queued). A track card queues that track; an album or
+  playlist card queues its first 50 tracks; artist cards have no track list,
+  so they buzz and are logged instead. To make this the default, set
+  `tap_while_playing = "queue"` under `[player]` in `config.toml`: then any
+  card tapped while something is playing is queued, and a tap while nothing
+  plays (or of the card that's on the platter itself) plays as usual. A
+  queued card counts as a play, but it never becomes the card on the
+  platter, so lifting it does nothing. The shelf has a *Queue* button next
+  to *Play* for the same thing from the admin.
+- **Press a playlist**: Spotify playlists change over time; a *pressing*
+  freezes one. *Press* on a playlist card in the admin snapshots its tracks
+  (up to 200) into the database, and the card plays exactly that list from
+  then on, shown as a "pressed on <date>, N tracks" badge. *Re-press* takes a
+  fresh snapshot, *Unpress* goes back to the live playlist. The pressing
+  lives in this player's database only: the card's tag still holds the live
+  playlist, so on another player it plays whatever the playlist is today.
+  Resume positions and single mode work on pressed cards too.
+- **Surprise me**: a *random* control card, or the *Surprise me* button at
+  the top of the shelf, plays a content card picked at random, weighted by
+  how long it has gone unplayed (a day of dust is a point; never-played cards
+  get the highest weight on the shelf). The log says which one it picked. It
+  plays like the admin's *Play* button, so it doesn't matter what card is on
+  the reader.
+- **Dusty records**: the "Make these records" page starts with a one-line
+  shelf summary (how many cards, how many plays from cards, the most played
+  one) and ends with *Dusty records*: cards not played in 60 days, or never,
+  longest-unplayed first, each with a *Play* button.
+- Control cards (play/pause, next, prev, shuffle, switch device, queue next,
+  random) are assigned the same way from the register page.
 - **Status**: the Status page shows whether everything is wired up (reader
   chip, Spotify account and device, raspotify, history poller, CPU
   temperature, disk, updates, backups), with an update button. See below.

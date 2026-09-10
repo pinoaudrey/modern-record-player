@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
 
+<p class="muted shelf-summary">
+  <strong>Shelf:</strong>
+  {{ report.shelf.cards }} record{{ '' if report.shelf.cards == 1 else 's' }},
+  {{ report.shelf.plays }} play{{ '' if report.shelf.plays == 1 else 's' }} from cards{% if report.shelf.most_played %},
+  most played: <strong>{{ report.shelf.most_played.name }}</strong> ({{ report.shelf.most_played.play_count }}){% endif %}.
+  {% if report.dusty %}{{ report.dusty | length }} dusty.{% endif %}
+</p>
+
 <h2>Make these records</h2>
 <p class="muted">
   What you actually listen to, from the play history this player collects
@@ -67,6 +75,30 @@
   <h2>Spotify's picks: your top artists</h2>
   <p class="muted">An artist card plays that artist's popular tracks.</p>
   {{ rows(report.top_artists, '') }}
+</section>
+
+<section class="panel">
+  <h2>Dusty records</h2>
+  <p class="muted">Cards on the shelf that haven't been played in {{ report.dusty_days }} days, or ever. Longest unplayed first.</p>
+  <table>
+    <tr><th></th><th>Name</th><th>Type</th><th>Last played</th><th></th></tr>
+    {% for card in report.dusty %}
+    <tr>
+      <td>{% if card.artwork_url %}<img class="art" src="{{ card.artwork_url }}" alt="">{% endif %}</td>
+      <td>
+        {{ card.name or card.uid }}
+        {% if card.artist %}<div class="muted">{{ card.artist }}</div>{% endif %}
+      </td>
+      <td>{{ card.content_type }}</td>
+      <td class="muted">{% if card.last_played_at %}{{ card.last_played_at | localtime('%b %d, %Y') }}{% else %}never{% endif %}</td>
+      <td class="actions">
+        <form class="inline" method="post" action="/cards/{{ card.uid }}/play"><button>Play</button></form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">Nothing gathering dust: every record on the shelf has been played recently.</td></tr>
+    {% endfor %}
+  </table>
 </section>
 
 <section class="panel">

@@ -21,6 +21,9 @@ class Config:
     sounds_dir: Path
     root: Path
     updates_auto: bool = True  # [updates] auto: nightly self-update timer applies updates
+    # [player] tap_while_playing: "play" replaces what's on, "queue" stacks the
+    # tapped card behind it (a tap while nothing is playing always plays).
+    tap_while_playing: str = "play"
 
 
 def load_config(root: Path | None = None) -> Config:
@@ -32,6 +35,9 @@ def load_config(root: Path | None = None) -> Config:
         )
     raw = tomllib.loads(path.read_text())
     player = raw.get("player", {})
+    tap = str(player.get("tap_while_playing", "play")).lower()
+    if tap not in ("play", "queue"):
+        raise ValueError(f'[player] tap_while_playing must be "play" or "queue", not {tap!r}')
     return Config(
         client_id=raw["spotify"]["client_id"],
         redirect_uri=raw["spotify"].get("redirect_uri", "http://127.0.0.1:8080/callback"),
@@ -49,4 +55,5 @@ def load_config(root: Path | None = None) -> Config:
         sounds_dir=root / raw["paths"].get("sounds", "sounds"),
         root=root,
         updates_auto=bool(raw.get("updates", {}).get("auto", True)),
+        tap_while_playing=tap,
     )
