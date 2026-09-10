@@ -53,6 +53,16 @@ EDITORIAL_NOTE = (
 
 
 @dataclass(frozen=True)
+class CurrentTrack:
+    """The bare playback state the scan loop needs: what is on, is it moving,
+    where is it, and what it's playing from."""
+    track_uri: str
+    is_playing: bool
+    position_ms: int
+    context_uri: str | None
+
+
+@dataclass(frozen=True)
 class NowPlaying:
     track_name: str
     artist: str
@@ -293,14 +303,51 @@ class SpotifyClient:
                     )
         return self._device_id
 
-    def play(self, uri: str) -> None:
+    def play(self, uri: str, position_ms: int | None = None, track_uri: str | None = None) -> None:
+        """Start `uri` on the player's device. With `position_ms` (and, for
+        albums/playlists, the `track_uri` to start at) playback picks up
+        where a card left off. Artist contexts can't take an offset."""
         device = self.device_id()
         if device is None:
             raise RuntimeError("No Spotify Connect devices available")
+        kwargs: dict = {}
+        if position_ms:
+            kwargs["position_ms"] = int(position_ms)
         if uri.startswith("spotify:track:"):
-            self.sp.start_playback(device_id=device, uris=[uri])
-        else:
-            self.sp.start_playback(device_id=device, context_uri=uri)
+            self.sp.start_playback(device_id=device, uris=[uri], **kwargs)
+            return
+        if track_uri and not uri.startswith("spotify:artist:"):
+            kwargs["offset"] = {"uri": track_uri}
+        elif "position_ms" in kwargs and not track_uri:
+            del kwargs["position_ms"]  # a position without a track is meaningless
+        self.sp.start_playback(device_id=device, context_uri=uri, **kwargs)
+
+    def current_track(self) -> CurrentTrack | None:
+        """What's on right now, or None when nothing is loaded on any device."""
+        state = self.sp.current_playback()
+        item = (state or {}).get("item")
+        if not item or not item.get("uri"):
+            return None
+        return CurrentTrack(
+            track_uri=item["uri"],
+            is_playing=bool(state.get("is_playing")),
+            position_ms=int(state.get("progress_ms") or 0),
+            context_uri=(state.get("context") or {}).get("uri"),
+        )
+
+    def is_playing(self) -> bool:
+        state = self.sp.current_playback()
+        return bool(state and state.get("is_playing"))
+
+    def pause(self) -> None:
+        self.sp.pause_playback(device_id=self.device_id())
+
+    def resume(self) -> None:
+        """Continue whatever is paused on the player's device."""
+        self.sp.start_playback(device_id=self.device_id())
+
+    def set_shuffle(self, state: bool) -> None:
+        self.sp.shuffle(bool(state), device_id=self.device_id())
 
     def play_pause(self) -> None:
         state = self.sp.current_playback()

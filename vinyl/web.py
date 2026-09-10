@@ -8,7 +8,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from .db import CONTROL_ACTIONS, Database
+from .db import CONTROL_ACTIONS, CardOptions, Database
 from .history import DEFAULT_WINDOW, WINDOWS, HistoryPoller, build_report
 from .links import parse_ref
 from .player import Player
@@ -78,6 +78,14 @@ def create_app(
             artist=artist or None, artwork_url=artwork_url or None,
         )
 
+    def options_from_form(single: str, resume: str, shuffle: str) -> CardOptions:
+        """Checkboxes post "1" when ticked and nothing when not; the shuffle
+        select is "" (leave alone), "on" or "off"."""
+        return CardOptions(
+            single=bool(single), resume=bool(resume),
+            shuffle={"on": True, "off": False}.get(shuffle),
+        )
+
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
         now, now_error = now_playing()
@@ -86,6 +94,7 @@ def create_app(
             "index.html",
             {
                 "cards": db.list_cards(),
+                "positions": db.list_positions(),
                 "pending": player.pending_scan,
                 "write": player.pending_write,
                 "last_write": player.last_write,
@@ -123,6 +132,7 @@ def create_app(
                 "result": result,
                 "error": error,
                 "link": link,
+                "options": CardOptions(),
             },
         )
 
@@ -165,19 +175,23 @@ def create_app(
         artist: str = Form(""),
         artwork_url: str = Form(""),
         write: str = Form(""),
+        single: str = Form(""),
+        resume: str = Form(""),
+        shuffle: str = Form(""),
     ):
         uid = uid.strip()
         content = content_from_form(uri, content_type, name, artist, artwork_url)
+        options = options_from_form(single, resume, shuffle)
         if uid:
             db.save_content_card(
                 uid=uid, uri=content.uri, content_type=content.content_type, name=content.name,
-                artist=content.artist, artwork_url=content.artwork_url,
+                artist=content.artist, artwork_url=content.artwork_url, options=options,
             )
             player.clear_pending(uid)
         elif not write:
             raise HTTPException(400, "A card UID is required unless writing to a card")
         if write:
-            player.arm_write(content)
+            player.arm_write(content, options=options)
         return RedirectResponse("/", status_code=303)
 
     @app.post("/register/control")
@@ -258,8 +272,26 @@ def create_app(
         card = db.get_card(uid)
         if card is None or card.kind != "content":
             raise HTTPException(404)
-        spotify.play(card.uri)
-        db.record_play(uid)
+        player.play_card(card)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/cards/{uid}/restart")
+    def restart_card(uid: str):
+        """Play from the top, forgetting any saved resume position."""
+        card = db.get_card(uid)
+        if card is None or card.kind != "content":
+            raise HTTPException(404)
+        player.play_card(card, from_top=True)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/cards/{uid}/options")
+    def card_options(
+        uid: str, single: str = Form(""), resume: str = Form(""), shuffle: str = Form(""),
+    ):
+        card = db.get_card(uid)
+        if card is None or card.kind != "content":
+            raise HTTPException(404)
+        db.set_card_options(uid, options_from_form(single, resume, shuffle))
         return RedirectResponse("/", status_code=303)
 
     # --- api ----------------------------------------------------------------
@@ -275,8 +307,17 @@ def create_app(
     if isinstance(reader, FakeReader):
 
         @app.post("/dev/scan")
-        def dev_scan(uid: str = Form(...), text: str = Form("")):
+        def dev_scan(uid: str = Form(...), text: str = Form(""), hold: str = Form("")):
+            if hold:
+                reader.hold(uid, text or None)
+                return {"held": uid, "text": reader.tag_text(uid)}
             reader.inject(uid, text or None)
             return {"injected": uid, "text": reader.tag_text(uid)}
+
+        @app.post("/dev/release")
+        def dev_release():
+            held = reader.held
+            reader.release()
+            return {"released": held}
 
     return app

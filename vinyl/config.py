@@ -11,6 +11,9 @@ class Config:
     reader_driver: str
     reader_rst_pin: int
     scan_cooldown: float
+    lift_to_pause: bool
+    lift_timeout: float
+    resume_window: float
     history_interval: float
     web_host: str
     web_port: int
@@ -27,6 +30,7 @@ def load_config(root: Path | None = None) -> Config:
             f"{path} not found. Copy config.example.toml to config.toml and edit it."
         )
     raw = tomllib.loads(path.read_text())
+    player = raw.get("player", {})
     return Config(
         client_id=raw["spotify"]["client_id"],
         redirect_uri=raw["spotify"].get("redirect_uri", "http://127.0.0.1:8080/callback"),
@@ -34,6 +38,9 @@ def load_config(root: Path | None = None) -> Config:
         reader_driver=raw["reader"].get("driver", "fake"),
         reader_rst_pin=int(raw["reader"].get("rst_pin", 22)),
         scan_cooldown=float(raw["reader"].get("scan_cooldown", 2.0)),
+        lift_to_pause=bool(player.get("lift_to_pause", True)),
+        lift_timeout=float(player.get("lift_timeout", 1.5)),
+        resume_window=float(player.get("resume_window", 900)),
         history_interval=float(raw.get("history", {}).get("poll_interval", 300)),
         web_host=raw["web"].get("host", "0.0.0.0"),
         web_port=int(raw["web"].get("port", 8090)),

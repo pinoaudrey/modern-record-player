@@ -16,6 +16,17 @@ rst_pin = 22
 # Ignore repeat reads of the same card within this many seconds
 scan_cooldown = 2.0
 
+[player]
+# Lift the needle: taking the card that started playback off the reader pauses
+# Spotify, putting the same card back resumes where it left off.
+lift_to_pause = true
+# Seconds without seeing the playing card before it counts as lifted. Keep it
+# below scan_cooldown, or a lifted-and-returned card is mistaken for a resting one.
+lift_timeout = 1.5
+# A card returning within this many seconds resumes; later than that it starts
+# from the top (like dropping the needle at the beginning again).
+resume_window = 900
+
 [history]
 # How often to ask Spotify for recently played tracks, in seconds. Spotify
 # only keeps the last 50, so this needs to run often enough to catch them all.

@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from vinyl.db import Database
-from vinyl.spotify import RecentPlay, ResolvedContent
+from vinyl.spotify import CurrentTrack, RecentPlay, ResolvedContent
 
 
 @dataclass
@@ -22,6 +22,15 @@ class FakeSpotify:
     artists: list = field(default_factory=list)
     top_error: Exception | None = None
     resolve_calls: int = 0
+    # playback state, for lift / single / resume tests
+    playing: bool = False
+    track_uri: str | None = None
+    context_uri: str | None = None
+    position_ms: int = 0
+    nothing_loaded: bool = False                  # current_track() returns None
+    play_kwargs: list = field(default_factory=list)   # (uri, position_ms, track_uri) per play()
+    shuffle_calls: list = field(default_factory=list)
+    playback_error: Exception | None = None       # raised by the playback-state calls
 
     def authorize_url(self):
         return "https://accounts.spotify.com/authorize?client_id=x&code_challenge=y"
@@ -56,8 +65,46 @@ class FakeSpotify:
     def now_playing_content(self):
         return self.now
 
-    def play(self, uri):
+    def play(self, uri, position_ms=None, track_uri=None):
         self.played.append(uri)
+        self.play_kwargs.append((uri, position_ms, track_uri))
+        self.playing = True
+        self.nothing_loaded = False
+        self.position_ms = position_ms or 0
+        if uri.startswith("spotify:track:"):
+            self.track_uri, self.context_uri = uri, None
+        else:
+            self.context_uri = uri
+            self.track_uri = track_uri or f"spotify:track:first-of-{uri.split(':')[-1]}"
+
+    def _check(self):
+        if self.playback_error:
+            raise self.playback_error
+
+    def is_playing(self):
+        self._check()
+        return self.playing
+
+    def pause(self):
+        self._check()
+        self.playing = False
+        self.calls.append("pause")
+
+    def resume(self):
+        self._check()
+        self.playing = True
+        self.calls.append("resume")
+
+    def current_track(self):
+        self._check()
+        if self.nothing_loaded or self.track_uri is None:
+            return None
+        return CurrentTrack(track_uri=self.track_uri, is_playing=self.playing,
+                            position_ms=self.position_ms, context_uri=self.context_uri)
+
+    def set_shuffle(self, state):
+        self.shuffle_state = state
+        self.shuffle_calls.append(state)
 
     def play_pause(self):
         self.calls.append("play_pause")

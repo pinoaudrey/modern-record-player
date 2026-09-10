@@ -132,3 +132,30 @@ def test_rc522_write_detects_rejected_write(rc522):
 
 def test_rc522_write_times_out_without_card(rc522):
     assert rc522.write(URI, timeout=0.01) is None
+
+
+def test_fake_hold_returns_card_on_every_poll_until_released():
+    r = FakeReader()
+    r.hold("9", URI)
+    assert r.held == "9"
+    assert r.poll(0.5) == Scan(uid="9", text=URI)
+    assert r.poll(0.5) == Scan(uid="9", text=URI)
+    r.release()
+    assert r.held is None
+    assert r.poll(0.01) is None
+
+
+def test_fake_tap_wins_over_held_card():
+    r = FakeReader()
+    r.hold("9")
+    r.inject("10")
+    assert r.poll(0.1).uid == "10"
+    assert r.poll(0.1).uid == "9"
+
+
+def test_fake_write_lands_on_held_card():
+    r = FakeReader()
+    r.hold("9")
+    r.poll(0.1)
+    assert r.write(URI, timeout=0.1) == Scan(uid="9", text=URI)
+    assert r.poll(0.1).text == URI

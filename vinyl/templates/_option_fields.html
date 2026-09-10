@@ -1,0 +1,11 @@
+<label title="Play this and then stop, instead of letting Spotify autoplay similar songs afterwards">
+  <input type="checkbox" name="single" value="1" {% if o.single %}checked{% endif %}> single
+</label>
+<label title="Continue where this card was interrupted (lifted, or replaced by another card)">
+  <input type="checkbox" name="resume" value="1" {% if o.resume %}checked{% endif %}> resume
+</label>
+<select name="shuffle" class="compact" title="Set shuffle before playing, or leave it as it is">
+  <option value="" {% if o.shuffle is none %}selected{% endif %}>shuffle: leave</option>
+  <option value="on" {% if o.shuffle is true %}selected{% endif %}>shuffle: on</option>
+  <option value="off" {% if o.shuffle is false %}selected{% endif %}>shuffle: off</option>
+</select>

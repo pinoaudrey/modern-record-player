@@ -99,5 +99,105 @@ def test_migrates_slice1_database(tmp_path):
     db.save_content_card("old", "spotify:album:a", "album", "Old Album", None, None, on_tag=True)
     assert db.get_card("old").on_tag == 1
     assert db.play_count() == 0  # v3 tables exist
+    from vinyl.db import CardOptions
+    assert card.options == CardOptions()  # v4 column
+    db.save_position("old", "spotify:track:t", 1)  # v4 table
     db.close()
     assert Database(path).schema_version() == SCHEMA_VERSION  # reopening doesn't re-run migrations
+
+
+# --- per-card options and resume positions -----------------------------------
+
+def test_card_options_default_and_roundtrip(db):
+    from vinyl.db import CardOptions
+    db.save_content_card("1", "spotify:album:a", "album", "A", None, None)
+    assert db.get_card("1").options == CardOptions()
+    db.set_card_options("1", CardOptions(single=True, resume=True, shuffle=False))
+    assert db.get_card("1").options == CardOptions(single=True, resume=True, shuffle=False)
+    db.set_card_options("1", CardOptions(shuffle=True))
+    assert db.get_card("1").options.shuffle is True
+    db.set_card_options("1", CardOptions())
+    assert db.get_card("1").options.shuffle is None
+
+
+def test_options_survive_reregister_unless_given(db):
+    from vinyl.db import CardOptions
+    db.save_content_card("1", "spotify:album:a", "album", "A", None, None,
+                         options=CardOptions(single=True))
+    db.save_content_card("1", "spotify:album:b", "album", "B", None, None)
+    assert db.get_card("1").options == CardOptions(single=True)
+    db.save_content_card("1", "spotify:album:c", "album", "C", None, None,
+                         options=CardOptions(resume=True))
+    assert db.get_card("1").options == CardOptions(resume=True)
+    db.save_control_card("1", "next")
+    assert db.get_card("1").options == CardOptions()
+
+
+def test_options_json_is_forgiving():
+    from vinyl.db import CardOptions
+    assert CardOptions.from_json(None) == CardOptions()
+    assert CardOptions.from_json("not json") == CardOptions()
+    assert CardOptions.from_json("[1, 2]") == CardOptions()
+    assert CardOptions.from_json('{"single": 1}') == CardOptions(single=True)
+    assert CardOptions.from_json('{"shuffle": false}').shuffle is False
+    assert CardOptions.from_json(CardOptions(resume=True).to_json()) == CardOptions(resume=True)
+
+
+def test_positions(db):
+    db.save_content_card("1", "spotify:album:a", "album", "A", None, None)
+    assert db.get_position("1") is None
+    db.save_position("1", "spotify:track:t", 12345)
+    pos = db.get_position("1")
+    assert (pos.uid, pos.track_uri, pos.position_ms) == ("1", "spotify:track:t", 12345)
+    assert pos.saved_at
+    db.save_position("1", "spotify:track:u", 99)
+    assert db.get_position("1").position_ms == 99
+    assert list(db.list_positions()) == ["1"]
+    db.clear_position("1")
+    assert db.get_position("1") is None
+    db.clear_position("1")  # idempotent
+
+
+def test_deleting_a_card_drops_its_position(db):
+    db.save_content_card("1", "spotify:album:a", "album", "A", None, None)
+    db.save_position("1", "spotify:track:t", 1)
+    db.delete_card("1")
+    assert db.get_position("1") is None
+
+
+def test_migrates_v3_database(tmp_path):
+    import sqlite3
+    from vinyl.db import SCHEMA_VERSION, CardOptions, Database
+
+    path = tmp_path / "v3.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE cards (
+            uid TEXT PRIMARY KEY, kind TEXT NOT NULL, uri TEXT, content_type TEXT,
+            name TEXT, artist TEXT, artwork_url TEXT, action TEXT,
+            created_at TEXT NOT NULL, last_played_at TEXT, play_count INTEGER NOT NULL DEFAULT 0,
+            on_tag INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE plays (played_at TEXT PRIMARY KEY, track_uri TEXT NOT NULL, track_name TEXT NOT NULL,
+            artist TEXT, album_uri TEXT NOT NULL, album_name TEXT NOT NULL, artwork_url TEXT, context_uri TEXT);
+        CREATE TABLE library (uri TEXT PRIMARY KEY, content_type TEXT NOT NULL, name TEXT, artist TEXT,
+            artwork_url TEXT, available INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL);
+        INSERT INTO meta VALUES ('schema_version', '3');
+        INSERT INTO cards (uid, kind, uri, content_type, name, created_at, play_count, on_tag)
+            VALUES ('old', 'content', 'spotify:album:a', 'album', 'Old Album', '2026-01-01', 3, 1);
+    """)
+    conn.commit()
+    conn.close()
+
+    db = Database(path)
+    assert db.schema_version() == SCHEMA_VERSION == 4
+    card = db.get_card("old")
+    assert card.name == "Old Album" and card.on_tag == 1
+    assert card.options == CardOptions()
+    db.set_card_options("old", CardOptions(single=True))
+    assert db.get_card("old").options.single is True
+    db.save_position("old", "spotify:track:t", 5)
+    assert db.get_position("old").position_ms == 5
+    db.close()
+    assert Database(path).schema_version() == SCHEMA_VERSION

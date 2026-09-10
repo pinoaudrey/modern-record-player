@@ -37,7 +37,11 @@ def cmd_run() -> None:
     spotify = SpotifyClient(cfg)
     reader = make_reader(cfg.reader_driver, cfg.reader_rst_pin)
     sounds = Sounds(cfg.sounds_dir)
-    player = Player(db, spotify, reader, sounds, scan_cooldown=cfg.scan_cooldown)
+    player = Player(
+        db, spotify, reader, sounds, scan_cooldown=cfg.scan_cooldown,
+        lift_to_pause=cfg.lift_to_pause, lift_timeout=cfg.lift_timeout,
+        resume_window=cfg.resume_window,
+    )
 
     if not spotify.authorized:
         log.warning("Spotify is not connected yet; cards will not play until you use the admin's Connect Spotify page (/auth)")

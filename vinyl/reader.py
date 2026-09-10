@@ -118,14 +118,19 @@ class FakeReader:
     Remembers the text written to each fake card, and treats the most recently
     scanned card as still resting on the reader for a few seconds so a write
     that follows a scan lands on that card, like on the real hardware.
+
+    hold(uid) mimics a card left on the reader: every poll returns it until
+    release(), the way the RC522 reports a resting card ten times a second.
     """
 
     PRESENCE_WINDOW = 3.0
+    HOLD_POLL_INTERVAL = 0.05
 
     def __init__(self):
         self._queue: queue.Queue[str] = queue.Queue()
         self._tags: dict[str, str] = {}
         self._present: tuple[str, float] | None = None
+        self._held: str | None = None
 
     def inject(self, uid: str, text: str | None = None) -> None:
         uid = str(uid)
@@ -133,14 +138,36 @@ class FakeReader:
             self._tags[uid] = text
         self._queue.put(uid)
 
+    def hold(self, uid: str, text: str | None = None) -> None:
+        """Leave `uid` resting on the reader until release()."""
+        uid = str(uid)
+        if text is not None:
+            self._tags[uid] = text
+        self._held = uid
+
+    def release(self) -> None:
+        """Lift whatever card is resting on the reader."""
+        self._held = None
+
+    @property
+    def held(self) -> str | None:
+        return self._held
+
     def tag_text(self, uid: str) -> str:
         return self._tags.get(str(uid), "")
 
     def poll(self, timeout: float) -> Scan | None:
+        held = self._held
         try:
-            uid = self._queue.get(timeout=timeout)
+            # A tapped card wins over the resting one; otherwise, while a card
+            # is held, report it right away (with a short breather so the scan
+            # loop doesn't spin) instead of waiting for the queue.
+            uid = self._queue.get(timeout=0 if held else timeout)
         except queue.Empty:
-            return None
+            if held is None:
+                return None
+            time.sleep(min(self.HOLD_POLL_INTERVAL, timeout))
+            uid = held
         self._present = (uid, time.monotonic())
         return Scan(uid=uid, text=self._tags.get(uid, ""))
 

@@ -1,12 +1,13 @@
+import json
 import sqlite3
 import threading
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 CONTROL_ACTIONS = {"play_pause", "next", "prev", "shuffle", "switch_device"}
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS cards (
@@ -21,7 +22,8 @@ CREATE TABLE IF NOT EXISTS cards (
     created_at TEXT NOT NULL,
     last_played_at TEXT,
     play_count INTEGER NOT NULL DEFAULT 0,
-    on_tag INTEGER NOT NULL DEFAULT 0
+    on_tag INTEGER NOT NULL DEFAULT 0,
+    options TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -48,15 +50,52 @@ CREATE TABLE IF NOT EXISTS library (
     available INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS positions (
+    uid TEXT PRIMARY KEY,
+    track_uri TEXT NOT NULL,
+    position_ms INTEGER NOT NULL DEFAULT 0,
+    saved_at TEXT NOT NULL
+);
 """
 
-_PLAYS_DDL = [stmt.strip() for stmt in _SCHEMA.split(";") if "plays" in stmt or "library" in stmt]
+_STATEMENTS = [stmt.strip() for stmt in _SCHEMA.split(";") if stmt.strip()]
+_PLAYS_DDL = [stmt for stmt in _STATEMENTS if "plays" in stmt or "library" in stmt]
+_POSITIONS_DDL = [stmt for stmt in _STATEMENTS if "positions" in stmt]
 
 # version -> statements that bring a database from version-1 up to version
 _MIGRATIONS: dict[int, list[str]] = {
     2: ["ALTER TABLE cards ADD COLUMN on_tag INTEGER NOT NULL DEFAULT 0"],
     3: _PLAYS_DDL,  # CREATE IF NOT EXISTS, harmless on a fresh database
+    4: ["ALTER TABLE cards ADD COLUMN options TEXT", *_POSITIONS_DDL],
 }
+
+
+@dataclass(frozen=True)
+class CardOptions:
+    """Per-card playback options, stored as JSON in cards.options."""
+    single: bool = False            # play this one thing, then stop (no autoplay)
+    resume: bool = False            # continue where the card was interrupted
+    shuffle: bool | None = None     # None = leave shuffle alone, else set it before playing
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self))
+
+    @classmethod
+    def from_json(cls, raw: str | None) -> "CardOptions":
+        if not raw:
+            return cls()
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return cls()
+        if not isinstance(data, dict):
+            return cls()
+        shuffle = data.get("shuffle")
+        return cls(
+            single=bool(data.get("single", False)),
+            resume=bool(data.get("resume", False)),
+            shuffle=None if shuffle is None else bool(shuffle),
+        )
 
 
 @dataclass(frozen=True)
@@ -73,6 +112,16 @@ class Card:
     last_played_at: str | None
     play_count: int
     on_tag: int  # 1 if the card's tag memory holds this uri (self-describing card)
+    options: CardOptions = CardOptions()
+
+
+@dataclass(frozen=True)
+class Position:
+    """Where a resume card was when it was interrupted."""
+    uid: str
+    track_uri: str
+    position_ms: int
+    saved_at: str
 
 
 @dataclass(frozen=True)
@@ -175,16 +224,28 @@ class Database:
         artist: str | None,
         artwork_url: str | None,
         on_tag: bool = False,
+        options: CardOptions | None = None,
     ) -> None:
+        """Register or re-register a content card. Existing options are kept
+        unless new ones are given."""
         with self._lock:
             self._conn.execute(
-                """INSERT INTO cards (uid, kind, uri, content_type, name, artist, artwork_url, on_tag, created_at)
-                   VALUES (?, 'content', ?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO cards (uid, kind, uri, content_type, name, artist, artwork_url, on_tag, options, created_at)
+                   VALUES (?, 'content', ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(uid) DO UPDATE SET
                      kind='content', uri=excluded.uri, content_type=excluded.content_type,
                      name=excluded.name, artist=excluded.artist, artwork_url=excluded.artwork_url,
-                     on_tag=excluded.on_tag, action=NULL""",
-                (uid, uri, content_type, name, artist, artwork_url, int(on_tag), _now()),
+                     on_tag=excluded.on_tag, action=NULL,
+                     options=COALESCE(excluded.options, cards.options)""",
+                (uid, uri, content_type, name, artist, artwork_url, int(on_tag),
+                 options.to_json() if options is not None else None, _now()),
+            )
+            self._conn.commit()
+
+    def set_card_options(self, uid: str, options: CardOptions) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE cards SET options = ? WHERE uid = ?", (options.to_json(), uid)
             )
             self._conn.commit()
 
@@ -197,7 +258,8 @@ class Database:
                    VALUES (?, 'control', ?, ?, ?)
                    ON CONFLICT(uid) DO UPDATE SET
                      kind='control', action=excluded.action, name=excluded.name,
-                     uri=NULL, content_type=NULL, artist=NULL, artwork_url=NULL, on_tag=0""",
+                     uri=NULL, content_type=NULL, artist=NULL, artwork_url=NULL, on_tag=0,
+                     options=NULL""",
                 (uid, action, action.replace("_", " ").title(), _now()),
             )
             self._conn.commit()
@@ -205,6 +267,7 @@ class Database:
     def delete_card(self, uid: str) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM cards WHERE uid = ?", (uid,))
+            self._conn.execute("DELETE FROM positions WHERE uid = ?", (uid,))
             self._conn.commit()
 
     def record_play(self, uid: str) -> None:
@@ -215,6 +278,30 @@ class Database:
             )
             self._conn.commit()
 
+
+    # --- resume positions ---------------------------------------------------
+
+    def save_position(self, uid: str, track_uri: str, position_ms: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO positions (uid, track_uri, position_ms, saved_at)
+                   VALUES (?, ?, ?, ?)""",
+                (uid, track_uri, int(position_ms), _now()),
+            )
+            self._conn.commit()
+
+    def get_position(self, uid: str) -> Position | None:
+        row = self._conn.execute("SELECT * FROM positions WHERE uid = ?", (uid,)).fetchone()
+        return Position(**{k: row[k] for k in row.keys()}) if row else None
+
+    def clear_position(self, uid: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM positions WHERE uid = ?", (uid,))
+            self._conn.commit()
+
+    def list_positions(self) -> dict[str, Position]:
+        rows = self._conn.execute("SELECT * FROM positions").fetchall()
+        return {r["uid"]: Position(**{k: r[k] for k in r.keys()}) for r in rows}
 
     # --- meta ---------------------------------------------------------------
 
@@ -312,4 +399,6 @@ class Database:
 
 
 def _to_card(row: sqlite3.Row) -> Card:
-    return Card(**{k: row[k] for k in row.keys()})
+    data = {k: row[k] for k in row.keys()}
+    data["options"] = CardOptions.from_json(data.get("options"))
+    return Card(**data)

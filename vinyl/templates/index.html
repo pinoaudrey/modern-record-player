@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  form.options { margin-top: .4rem; font-size: .8rem; opacity: .85; white-space: nowrap; }
+  form.options label { margin-right: .4rem; }
+  form.options button { padding: .2rem .5rem; font-size: .75rem; }
+  select.compact { min-width: 0; padding: .2rem; font-size: .8rem; }
+</style>
 
 {% if write %}
 <div class="banner armed">
@@ -82,6 +88,9 @@
     <td class="actions">
       {% if card.kind == 'content' %}
       <form class="inline" method="post" action="/cards/{{ card.uid }}/play"><button>Play</button></form>
+      <form class="inline" method="post" action="/cards/{{ card.uid }}/restart">
+        <button class="secondary" title="Play from the top and forget any saved position">Restart</button>
+      </form>
       <form class="inline" method="post" action="/cards/{{ card.uid }}/write">
         <button class="secondary" title="Write this URI onto a card (this one, or a copy)">Write to card</button>
       </form>
@@ -90,6 +99,17 @@
             onsubmit="return confirm('Delete this card?')">
         <button class="danger">Delete</button>
       </form>
+      {% if card.kind == 'content' %}
+      <form class="options" method="post" action="/cards/{{ card.uid }}/options">
+        {% with o = card.options %}{% include "_option_fields.html" %}{% endwith %}
+        <button class="secondary">Save</button>
+        {% if card.uid in positions %}
+        <span class="badge" title="Resume position saved when this card was last interrupted">
+          paused at {{ (positions[card.uid].position_ms // 60000) }}:{{ '%02d' % ((positions[card.uid].position_ms // 1000) % 60) }}
+        </span>
+        {% endif %}
+      </form>
+      {% endif %}
     </td>
   </tr>
   {% else %}

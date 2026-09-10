@@ -266,3 +266,92 @@ def test_localtime_filter_handles_spotify_and_ours():
     assert localtime("2026-09-09T03:27:18.594Z", "%Y-%m-%dT%H:%M%z") == localtime("2026-09-09T03:27:18Z", "%Y-%m-%dT%H:%M%z")
     assert localtime(None) == ""
     assert localtime("garbage") == "garbage"
+
+
+# --- per-card options, restart, resume ----------------------------------------
+
+def test_card_options_endpoint(client):
+    from vinyl.db import CardOptions
+    tc, db, *_ = client
+    db.save_content_card("7", "spotify:album:a", "album", "Album", None, None)
+    r = tc.post("/cards/7/options", data={"single": "1", "shuffle": "off"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert db.get_card("7").options == CardOptions(single=True, resume=False, shuffle=False)
+    r = tc.post("/cards/7/options", data={"resume": "1", "shuffle": "on"}, follow_redirects=False)
+    assert db.get_card("7").options == CardOptions(resume=True, shuffle=True)
+    r = tc.post("/cards/7/options", data={}, follow_redirects=False)
+    assert db.get_card("7").options == CardOptions()
+    assert tc.post("/cards/nope/options", data={}).status_code == 404
+
+    db.set_card_options("7", CardOptions(single=True, shuffle=True))
+    r = tc.get("/")
+    assert 'name="single" value="1" checked' in r.text
+    assert '<option value="on" selected>' in r.text
+    assert "/cards/7/options" in r.text and "/cards/7/restart" in r.text
+
+
+def test_register_save_stores_options(client):
+    from vinyl.db import CardOptions
+    tc, db, player, _, _ = client
+    r = tc.post(
+        "/register/save",
+        data={"uid": "555", "uri": NOW.uri, "content_type": "playlist", "name": NOW.name,
+              "resume": "1", "shuffle": "on"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert db.get_card("555").options == CardOptions(resume=True, shuffle=True)
+
+    r = tc.post(
+        "/register/save",
+        data={"uid": "", "uri": NOW.uri, "content_type": "playlist", "name": NOW.name,
+              "write": "1", "single": "1"},
+        follow_redirects=False,
+    )
+    assert player.pending_write.options == CardOptions(single=True)
+
+    r = tc.post("/register/resolve", data={"uid": "1", "link": NOW.uri})
+    assert 'name="shuffle"' in r.text and 'name="single"' in r.text and 'name="resume"' in r.text
+
+
+def test_play_goes_through_player_options(client):
+    from vinyl.db import CardOptions
+    tc, db, player, spotify, _ = client
+    db.save_content_card("7", "spotify:album:a", "album", "Album", None, None,
+                         options=CardOptions(shuffle=True))
+    tc.post("/cards/7/play", follow_redirects=False)
+    assert spotify.shuffle_calls == [True]
+    assert db.get_card("7").play_count == 1
+    assert player.current_uid is None            # not on the reader
+
+
+def test_restart_clears_saved_position(client):
+    from vinyl.db import CardOptions
+    tc, db, _, spotify, _ = client
+    db.save_content_card("7", "spotify:album:a", "album", "Album", None, None,
+                         options=CardOptions(resume=True))
+    db.save_position("7", "spotify:track:t", 83000)
+    r = tc.get("/")
+    assert "paused at 1:23" in r.text
+
+    r = tc.post("/cards/7/restart", follow_redirects=False)
+    assert r.status_code == 303
+    assert spotify.play_kwargs == [("spotify:album:a", None, None)]
+    assert db.get_position("7") is None
+    assert "paused at" not in tc.get("/").text
+    assert tc.post("/cards/nope/restart").status_code == 404
+
+    db.save_position("7", "spotify:track:t", 83000)
+    tc.post("/cards/7/play", follow_redirects=False)
+    assert spotify.play_kwargs[-1] == ("spotify:album:a", 83000, "spotify:track:t")
+
+
+def test_dev_scan_hold_and_release(client):
+    tc, _, _, _, reader = client
+    r = tc.post("/dev/scan", data={"uid": "123", "hold": "1"})
+    assert r.json() == {"held": "123", "text": ""}
+    assert reader.poll(0.1).uid == "123"
+    assert reader.poll(0.1).uid == "123"
+    r = tc.post("/dev/release")
+    assert r.json() == {"released": "123"}
+    assert reader.poll(0.01) is None

@@ -118,6 +118,21 @@ Web admin: `http://<pi-hostname>.local:8090`
   the shelf. Every row has a "Make a record" button that arms a write.
 - A card left resting on the reader plays once. Lift it for a couple of
   seconds and put it back to start it over, like a record on the platter.
+- **Lift the needle**: taking the card that started playback off the reader
+  pauses Spotify, and putting the same card back resumes where it left off.
+  The player only pauses what it can see playing, so a phone that already
+  paused is left alone. A card that comes back much later (`resume_window`
+  in `config.toml`, 15 minutes by default) starts from the top instead. The
+  whole thing can be switched off with `lift_to_pause = false`.
+- **Per-card options**: every content card on the shelf has a small options
+  row (also on the register page, so they're saved with the card). *Single*
+  plays that one track, or that one album or playlist, and then stops instead
+  of letting Spotify autoplay similar songs afterwards. *Resume* makes the
+  card remember where it was when it was interrupted, by lifting it or by
+  tapping another card, and continue from there next time; the shelf shows
+  "paused at 1:23" next to such a card, and its *Restart* button plays from
+  the top and forgets the position. *Shuffle* sets shuffle on or off before
+  the card plays, or leaves it as it is.
 - Control cards (play/pause, next, prev, shuffle, switch device) are assigned
   the same way from the register page.
 - Sound cues go in `sounds/` (see `sounds/README.md`).
@@ -168,6 +183,16 @@ curl -X POST http://127.0.0.1:8090/dev/scan -d uid=777 -d text=spotify:album:22p
 The fake reader remembers what was written to each fake card, and treats the
 last scanned card as still resting on the reader for a few seconds, so
 "arm a write, then scan" works the same way it does on the hardware.
+
+To leave a card resting on the reader, the way a real card is reported on
+every poll while it lies there, hold it; release it to lift it (which pauses
+Spotify), and hold it again to resume:
+
+```bash
+curl -X POST http://127.0.0.1:8090/dev/scan -d uid=12345 -d hold=1
+curl -X POST http://127.0.0.1:8090/dev/release
+curl -X POST http://127.0.0.1:8090/dev/scan -d uid=12345 -d hold=1
+```
 
 ## Roadmap
 

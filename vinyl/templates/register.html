@@ -37,6 +37,10 @@
 <form method="post" action="/register/save">
   <input type="hidden" name="uid" value="{{ uid }}">
   {% with c = result %}{% include "_content_fields.html" %}{% endwith %}
+  <p class="muted" style="margin:.25rem 0 .75rem">
+    Options:
+    {% with o = options %}{% include "_option_fields.html" %}{% endwith %}
+  </p>
   {% if uid %}<button>Save card</button>{% endif %}
   <button class="secondary" name="write" value="1">
     {% if uid %}Save &amp; write to card{% else %}Write to the next card{% endif %}
