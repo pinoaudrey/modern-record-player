@@ -382,6 +382,10 @@ class SpotifyClient:
     def list_devices(self) -> list[dict]:
         return self.sp.devices().get("devices", [])
 
+    def me(self) -> dict:
+        """The connected account's profile (display_name, id, ...), for the status page."""
+        return self.sp.me() or {}
+
 
 def _first_image(obj: dict) -> str | None:
     images = obj.get("images") or []

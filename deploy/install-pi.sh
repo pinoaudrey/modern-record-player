@@ -18,7 +18,7 @@ sudo apt-get update -q
 # python3-rpi-lgpio is the Pi 5 compatible RPi.GPIO replacement; the venv is
 # created with --system-site-packages so it and spidev come from apt instead
 # of being compiled by pip.
-sudo apt-get install -y -q git python3-venv python3-pip python3-rpi-lgpio python3-spidev mpg123 curl
+sudo apt-get install -y -q git python3-venv python3-pip python3-rpi-lgpio python3-spidev mpg123 alsa-utils curl
 
 echo "== Enable SPI (takes effect after a reboot)"
 sudo raspi-config nonint do_spi 0
@@ -56,11 +56,29 @@ if [ ! -f config.toml ]; then
       config.example.toml > config.toml
 fi
 
+echo "== Sudo rule (lets the player restart itself after an update, and reboot from the admin)"
+# Exactly two commands, no password, checked with visudo before it goes live.
+SUDOERS_TMP=$(mktemp)
+cat > "$SUDOERS_TMP" <<EOF
+# Installed by modern-record-player/deploy/install-pi.sh. The player runs as
+# $USER and restarts its own service after a self-update; the admin's status
+# page has a reboot button. Nothing else.
+$USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart record-player@$USER, /usr/sbin/reboot
+EOF
+sudo visudo -cf "$SUDOERS_TMP" >/dev/null
+sudo install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/record-player
+rm -f "$SUDOERS_TMP"
+
 echo "== Service"
 sudo cp deploy/record-player.service "/etc/systemd/system/record-player@$USER.service"
+sudo cp deploy/record-player-update.service "/etc/systemd/system/record-player-update@$USER.service"
+sudo cp deploy/record-player-update.timer "/etc/systemd/system/record-player-update@$USER.timer"
 sudo systemctl daemon-reload
 sudo systemctl enable "record-player@$USER" >/dev/null
 sudo systemctl restart "record-player@$USER"
+# Nightly self-update at 04:30 (+ up to 30 min). `[updates] auto = false` in
+# config.toml turns it into a no-op without touching systemd.
+sudo systemctl enable --now "record-player-update@$USER.timer" >/dev/null
 
 echo
 echo "Done. Next steps:"

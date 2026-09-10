@@ -135,7 +135,11 @@ Web admin: `http://<pi-hostname>.local:8090`
   the card plays, or leaves it as it is.
 - Control cards (play/pause, next, prev, shuffle, switch device) are assigned
   the same way from the register page.
-- Sound cues go in `sounds/` (see `sounds/README.md`).
+- **Status**: the Status page shows whether everything is wired up (reader
+  chip, Spotify account and device, raspotify, history poller, CPU
+  temperature, disk, updates, backups), with an update button. See below.
+- Sound cues go in `sounds/` (see `sounds/README.md`). Missing ones are
+  generated at startup.
 
 CLI equivalents, handy over ssh (stop the service first if using `write`,
 the RC522 can't be shared between processes):
@@ -144,6 +148,9 @@ the RC522 can't be shared between processes):
 .venv/bin/python -m vinyl now                     # what's playing, and what a card of it would hold
 .venv/bin/python -m vinyl write <spotify link>    # write that URI to the next card tapped
 .venv/bin/python -m vinyl history                 # poll play history once, list recent plays
+.venv/bin/python -m vinyl update                  # pull + reinstall + restart if behind (what the nightly timer runs)
+.venv/bin/python -m vinyl backup                  # copy records.db into backups/ now
+.venv/bin/python -m vinyl sounds                  # regenerate the wav sound cues
 ```
 
 Spotify-curated playlists (Discover Weekly, Today's Top Hits, anything whose
@@ -161,6 +168,87 @@ sudo systemctl status record-player@$USER
 journalctl -u record-player@$USER -f
 sudo systemctl restart record-player@$USER
 ```
+
+### Status
+
+`http://<pi-hostname>.local:8090/status` (the "Status" link in the admin), or
+`GET /api/health` for the same thing as JSON. Every row has a green dot or an
+orange triangle:
+
+- Player: version (git hash and commit date), uptime, reader driver, and for
+  the RC522 the chip's version register, read once at startup. `0x91`/`0x92`
+  is a genuine MFRC522, other values are clones (they work), `0x00`/`0xFF`
+  means nothing is answering on SPI: check the wiring and that SPI is
+  enabled.
+- Spotify: connected, account name, whether the configured `device_name` is
+  in the Spotify Connect device list right now, and the active device.
+- raspotify: `systemctl is-active raspotify`.
+- History: plays collected, last poll, last error.
+- System: CPU temperature, free disk, whether an update is available, last
+  backup.
+
+A Spotify or git hiccup shows as a warning row, never an error page.
+
+### Updates
+
+The status page checks the git remote (at most every 15 minutes, "Check
+again" forces it) and shows how many commits behind the player is. "Update
+now" runs `git pull --ff-only`, reinstalls the package if `pyproject.toml`
+changed, and restarts the service. The restart needs root, so
+`install-pi.sh` installs `/etc/sudoers.d/record-player` (checked with
+`visudo -cf`, mode 0440) that lets the player's user run exactly these two
+commands without a password:
+
+```
+/usr/bin/systemctl restart record-player@<user>
+/usr/sbin/reboot
+```
+
+The second one is the "Reboot" button on the same page. If the sudo rule is
+missing the update still lands; the page says so and asks you to restart
+manually.
+
+Nightly self-update: `install-pi.sh` also enables
+`record-player-update@<user>.timer`, which runs `python -m vinyl update` at
+04:30 (plus up to 30 minutes of random delay). That command pulls only when
+the repo is behind, backs up the database first, and does nothing at all
+when `config.toml` has
+
+```toml
+[updates]
+auto = false
+```
+
+The timer isn't persistent: if the Pi is off at 04:30 it simply tries again
+the next night. `journalctl -u record-player-update@$USER` shows what it did.
+
+### Backups and restore
+
+`records.db` (cards, play history) is copied with SQLite's online backup
+API into `backups/records-YYYYMMDD-HHMM.db`: once when the player starts
+(unless there is already one from today), then every 24 hours, keeping the
+newest 14. `python -m vinyl backup` takes one now. `backups/` is
+gitignored; copy it somewhere else now and then if you care about the
+history.
+
+To restore, stop the service, copy the backup over the database, start it
+again:
+
+```bash
+sudo systemctl stop record-player@$USER
+cp backups/records-20260909-0430.db records.db
+rm -f records.db-wal records.db-shm
+sudo systemctl start record-player@$USER
+```
+
+### Sound cues
+
+The player chirps on scan, error, write, and so on. It plays `sounds/<cue>.mp3`
+through mpg123 when that file exists, otherwise `sounds/<cue>.wav` through
+`aplay`. At startup any cue with neither file gets a generated wav (simple
+sine tones), so a fresh install has sound without any files to copy.
+`python -m vinyl sounds` regenerates all of them; drop in your own mp3s to
+override. Cue names are in `sounds/README.md`.
 
 ## Development (no Pi needed)
 

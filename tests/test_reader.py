@@ -72,16 +72,23 @@ class StubMFRC522:
     """The low-level driver; records the reset pin it was built with."""
 
     instances: list = []
+    version = 0x92       # what Read_MFRC522(0x37) returns; None makes the read raise
 
     def __init__(self, bus=0, device=0, spd=1000000, pin_mode=10, pin_rst=-1, debugLevel="WARNING"):
         self.pin_rst = pin_rst
         StubMFRC522.instances.append(self)
+
+    def Read_MFRC522(self, addr):
+        if type(self).version is None:
+            raise OSError("SPI not available")
+        return type(self).version if addr == 0x37 else 0
 
 
 def _fake_mfrc522_module(monkeypatch):
     StubSimpleMFRC522.card = None
     StubSimpleMFRC522.accept_writes = True
     StubMFRC522.instances = []
+    StubMFRC522.version = 0x92
     monkeypatch.setitem(
         sys.modules, "mfrc522",
         types.SimpleNamespace(SimpleMFRC522=StubSimpleMFRC522, MFRC522=StubMFRC522),
@@ -108,6 +115,29 @@ def test_rc522_reset_pin_is_configurable(monkeypatch):
     RC522Reader()
     RC522Reader(rst_pin=16)
     assert [r.pin_rst for r in StubMFRC522.instances] == [22, 16]
+
+
+def test_rc522_reads_chip_version_once_and_reports_it(monkeypatch):
+    _fake_mfrc522_module(monkeypatch)
+    r = RC522Reader()
+    assert r.chip_version == 0x92
+    assert r.status() == {"driver": "rc522", "chip_version": 0x92, "chip": "MFRC522 v2.0 (0x92)", "ok": True}
+
+    StubMFRC522.version = 0x00       # nothing answering on the bus
+    st = RC522Reader().status()
+    assert st["ok"] is False and "not responding" in st["chip"]
+
+    StubMFRC522.version = 0xB2       # a clone
+    st = RC522Reader().status()
+    assert st["ok"] is True and "clone" in st["chip"]
+
+    StubMFRC522.version = None       # register read blows up: still constructs
+    st = RC522Reader().status()
+    assert st["chip_version"] is None and st["ok"] is False
+
+
+def test_fake_reader_status():
+    assert FakeReader().status() == {"driver": "fake", "ok": True}
 
 
 def test_rc522_poll_strips_padding_and_nulls(rc522):

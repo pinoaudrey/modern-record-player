@@ -9,3 +9,5 @@ logs/
 sounds/*.mp3
 .pytest_cache/
 *.egg-info/
+sounds/*.wav
+backups/

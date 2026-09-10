@@ -12,8 +12,24 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
+log = logging.getLogger(__name__)
+
 TAG_TEXT_MAX = 48  # 3 blocks x 16 bytes, what SimpleMFRC522 reads/writes
 _POLL_INTERVAL = 0.1
+_VERSION_REG = 0x37  # MFRC522 VersionReg: 0x91 = v1.0, 0x92 = v2.0, clones report other values
+
+
+def describe_chip_version(value: int | None) -> tuple[str, bool]:
+    """(human text, healthy?) for the RC522 version register."""
+    if value is None:
+        return "unknown (register read failed)", False
+    if value in (0x00, 0xFF):
+        return f"not responding (0x{value:02x}); check the SPI wiring and that SPI is enabled", False
+    if value == 0x91:
+        return "MFRC522 v1.0 (0x91)", True
+    if value == 0x92:
+        return "MFRC522 v2.0 (0x92)", True
+    return f"clone chip (0x{value:02x}), usually works", True
 
 
 @dataclass(frozen=True)
@@ -75,6 +91,19 @@ class RC522Reader:
         lib_log.handlers.clear()
         lib_log.propagate = False
         lib_log.setLevel(logging.CRITICAL)
+        # Read the chip's version register once: it's the quickest way to tell
+        # "wired and talking" from "nothing on the bus" on the status page.
+        try:
+            self.chip_version: int | None = int(self._reader.READER.Read_MFRC522(_VERSION_REG))
+        except Exception as e:
+            log.warning("Could not read the RC522 version register: %s", e)
+            self.chip_version = None
+        text, ok = describe_chip_version(self.chip_version)
+        (log.info if ok else log.warning)("RC522 chip: %s", text)
+
+    def status(self) -> dict:
+        text, ok = describe_chip_version(self.chip_version)
+        return {"driver": "rc522", "chip_version": self.chip_version, "chip": text, "ok": ok}
 
     def poll(self, timeout: float) -> Scan | None:
         deadline = time.monotonic() + timeout
@@ -155,6 +184,9 @@ class FakeReader:
 
     def tag_text(self, uid: str) -> str:
         return self._tags.get(str(uid), "")
+
+    def status(self) -> dict:
+        return {"driver": "fake", "ok": True}
 
     def poll(self, timeout: float) -> Scan | None:
         held = self._held

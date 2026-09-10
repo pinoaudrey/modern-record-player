@@ -7,6 +7,9 @@
   python -m vinyl history          poll play history once and list recent plays
   python -m vinyl write <link>     write a share link's URI onto the next card tapped
   python -m vinyl resolve <link>   debug: parse + look up a share link
+  python -m vinyl update           pull + reinstall + restart if the repo is behind (nightly timer)
+  python -m vinyl backup           copy records.db into backups/ now
+  python -m vinyl sounds           regenerate the wav sound cues in sounds/
 
 `write` talks to the reader directly, so on the Pi stop the service first
 (sudo systemctl stop record-player@$USER); two processes can't share the RC522.
@@ -18,6 +21,7 @@ import threading
 
 import uvicorn
 
+from . import backup, updates
 from .config import load_config
 from .db import Database
 from .history import HistoryPoller
@@ -26,6 +30,8 @@ from .player import Player
 from .reader import make_reader
 from .sounds import Sounds
 from .spotify import NotAuthorized, SpotifyClient, make_auth_manager
+from .status import Health
+from .tones import generate as generate_tones
 from .web import create_app
 
 log = logging.getLogger(__name__)
@@ -37,6 +43,7 @@ def cmd_run() -> None:
     spotify = SpotifyClient(cfg)
     reader = make_reader(cfg.reader_driver, cfg.reader_rst_pin)
     sounds = Sounds(cfg.sounds_dir)
+    sounds.ensure_cues()
     player = Player(
         db, spotify, reader, sounds, scan_cooldown=cfg.scan_cooldown,
         lift_to_pause=cfg.lift_to_pause, lift_timeout=cfg.lift_timeout,
@@ -49,10 +56,50 @@ def cmd_run() -> None:
     threading.Thread(target=player.run_forever, daemon=True, name="scan-loop").start()
     poller = HistoryPoller(db, spotify, interval=cfg.history_interval)
     threading.Thread(target=poller.run_forever, daemon=True, name="history").start()
+    backups_dir = cfg.root / "backups"
+    threading.Thread(
+        target=backup.run_forever, args=(cfg.db_path, backups_dir), daemon=True, name="backup",
+    ).start()
 
-    app = create_app(db, spotify, player, reader=reader, poller=poller)
-    log.info("Web admin on http://%s:%s (reader: %s)", cfg.web_host, cfg.web_port, cfg.reader_driver)
+    health = Health(
+        db, spotify, reader, poller, repo=cfg.root, device_name=cfg.device_name,
+        updates_auto=cfg.updates_auto, backups_dir=backups_dir,
+    )
+    app = create_app(db, spotify, player, reader=reader, poller=poller, health=health)
+    log.info("Web admin on http://%s:%s (reader: %s, version %s)",
+             cfg.web_host, cfg.web_port, cfg.reader_driver, health.version)
     uvicorn.run(app, host=cfg.web_host, port=cfg.web_port, log_level="warning")
+
+
+def cmd_update() -> None:
+    """Nightly self-update (record-player-update@<user>.timer). Does nothing
+    when [updates] auto is false; otherwise pulls only if the repo is behind."""
+    cfg = load_config()
+    if not cfg.updates_auto:
+        return
+    behind, latest = updates.check(cfg.root)
+    if not behind:
+        print(f"Up to date ({updates.version(cfg.root)}).")
+        return
+    print(f"{behind} commit(s) behind, latest: {latest}")
+    backup.backup(cfg.db_path, cfg.root / "backups")
+    result = updates.apply(cfg.root)
+    print(result.summary)
+    if result.warning:
+        print(result.warning)
+        sys.exit(1)
+
+
+def cmd_backup() -> None:
+    cfg = load_config()
+    dest = backup.backup(cfg.db_path, cfg.root / "backups")
+    print(f"Backed up to {dest}")
+
+
+def cmd_sounds() -> None:
+    cfg = load_config()
+    for path in generate_tones(cfg.sounds_dir):
+        print(f"wrote {path}")
 
 
 def cmd_auth() -> None:
@@ -164,11 +211,20 @@ def main() -> None:
             cmd_resolve(args[1])
         elif cmd == "write" and len(args) > 1:
             cmd_write(args[1])
+        elif cmd == "update":
+            cmd_update()
+        elif cmd == "backup":
+            cmd_backup()
+        elif cmd == "sounds":
+            cmd_sounds()
         else:
             print(__doc__)
             sys.exit(2)
     except NotAuthorized as e:
         print(e)
+        sys.exit(1)
+    except updates.UpdateError as e:
+        print(f"Update failed: {e}")
         sys.exit(1)
 
 

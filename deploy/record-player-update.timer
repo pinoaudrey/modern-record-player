@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly self-update for the Modern Record Player
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=30min
+Unit=record-player-update@%i.service
+
+[Install]
+WantedBy=timers.target

@@ -1,6 +1,8 @@
 """Web admin: register cards, browse the collection, make records of what's playing."""
 
 import logging
+import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,12 +10,14 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from . import updates
 from .db import CONTROL_ACTIONS, CardOptions, Database
 from .history import DEFAULT_WINDOW, WINDOWS, HistoryPoller, build_report
 from .links import parse_ref
 from .player import Player
 from .reader import FakeReader
 from .spotify import NotAuthorized, ResolvedContent, SpotifyClient
+from .status import Health
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +39,7 @@ def localtime(iso: str | None, fmt: str = "%b %d, %H:%M") -> str:
 
 def create_app(
     db: Database, spotify: SpotifyClient, player: Player, reader=None,
-    poller: HistoryPoller | None = None,
+    poller: HistoryPoller | None = None, health: Health | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Modern Record Player")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -301,8 +305,75 @@ def create_app(
         return status()
 
     @app.get("/health")
-    def health():
+    def health_ping():
         return {"ok": True}
+
+    # --- status page, self-update, reboot (vinyl/status.py, vinyl/updates.py) ---
+    # Kept in one block, separate from the player routes above.
+
+    if health is None:
+        health = Health(
+            db, spotify, reader, poller, repo=TEMPLATES_DIR.parent.parent,
+            device_name=getattr(spotify, "device_name", "") or "",
+        )
+
+    def render_status(request, result=None, notice=None, error=None, restarting=False, refresh=False):
+        return templates.TemplateResponse(
+            request,
+            "status.html",
+            {
+                "health": health.collect(refresh_updates=refresh),
+                "result": result,
+                "notice": notice,
+                "error": error,
+                "restarting": restarting,
+                "restart_cmd": " ".join(updates.restart_command()[2:]),
+            },
+        )
+
+    @app.get("/status", response_class=HTMLResponse)
+    def status_page(request: Request, refresh: str = ""):
+        return render_status(request, refresh=bool(refresh))
+
+    @app.get("/api/health")
+    def api_health():
+        return health.collect()
+
+    @app.post("/update", response_class=HTMLResponse)
+    def update_now(request: Request):
+        try:
+            result = updates.apply(health.repo, restart=False)
+        except updates.UpdateError as e:
+            log.warning("Update failed: %s", e)
+            return render_status(request, error=f"Update failed: {e}")
+        health.invalidate_updates()
+        restarting = False
+        if result.updated:
+            # The restart kills this process, so answer first and restart a
+            # second later. Ask sudo whether it's allowed instead of finding
+            # out from a dead page.
+            if updates.can_sudo(updates.restart_command()):
+                threading.Timer(1.0, updates.restart_service).start()
+                result.restarted = restarting = True
+            else:
+                result.warning = (
+                    "The code is updated, but this user may not restart the service without a "
+                    "password (re-run deploy/install-pi.sh to install the sudo rule). Restart it "
+                    f"manually: sudo {' '.join(updates.restart_command()[2:])}"
+                )
+        return render_status(request, result=result, restarting=restarting)
+
+    @app.post("/reboot", response_class=HTMLResponse)
+    def reboot(request: Request):
+        if not updates.can_sudo(updates.reboot_command()):
+            return render_status(
+                request,
+                error="This user may not reboot without a password (re-run deploy/install-pi.sh "
+                      "to install the sudo rule). Over ssh: sudo reboot",
+            )
+        threading.Timer(1.0, subprocess.run, args=(updates.reboot_command(),)).start()
+        return render_status(request, notice="Rebooting. This page reloads once the player is back.",
+                             restarting=True)
 
     if isinstance(reader, FakeReader):
 

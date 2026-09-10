@@ -32,6 +32,25 @@ class FakeSpotify:
     shuffle_calls: list = field(default_factory=list)
     playback_error: Exception | None = None       # raised by the playback-state calls
 
+    # status page: account + Spotify Connect device list
+    device_name: str = "Record Player"
+    display_name: str | None = "Audrey"
+    devices: list = field(default_factory=lambda: [
+        {"id": "raspotify-device-id", "name": "Record Player", "is_active": True},
+    ])
+    me_error: Exception | None = None
+    devices_error: Exception | None = None
+
+    def me(self):
+        if self.me_error:
+            raise self.me_error
+        return {"display_name": self.display_name, "id": "audrey"}
+
+    def list_devices(self):
+        if self.devices_error:
+            raise self.devices_error
+        return self.devices
+
     def authorize_url(self):
         return "https://accounts.spotify.com/authorize?client_id=x&code_challenge=y"
 
