@@ -28,3 +28,8 @@ port = 8090
 [paths]
 db = "records.db"
 sounds = "sounds"
+
+[updates]
+# Nightly self-update (git pull, reinstall if needed, restart) at 04:30.
+# The status page can always update on demand, whatever this says.
+auto = true

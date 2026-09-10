@@ -1,0 +1,13 @@
+[Unit]
+Description=Modern Record Player nightly self-update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/home/%i/Documents/modern-record-player
+# Does nothing unless [updates] auto = true in config.toml and the repo is
+# behind its upstream. The restart it triggers uses the sudo rule from
+# deploy/install-pi.sh (/etc/sudoers.d/record-player).
+ExecStart=/home/%i/Documents/modern-record-player/.venv/bin/python -m vinyl update

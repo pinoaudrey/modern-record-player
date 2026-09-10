@@ -17,6 +17,7 @@ class Config:
     db_path: Path
     sounds_dir: Path
     root: Path
+    updates_auto: bool = True  # [updates] auto: nightly self-update timer applies updates
 
 
 def load_config(root: Path | None = None) -> Config:
@@ -40,4 +41,5 @@ def load_config(root: Path | None = None) -> Config:
         db_path=root / raw["paths"].get("db", "records.db"),
         sounds_dir=root / raw["paths"].get("sounds", "sounds"),
         root=root,
+        updates_auto=bool(raw.get("updates", {}).get("auto", True)),
     )
