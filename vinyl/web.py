@@ -1,6 +1,7 @@
 """Web admin: register cards, browse the collection, make records of what's playing."""
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -19,12 +20,26 @@ log = logging.getLogger(__name__)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
+def localtime(iso: str | None, fmt: str = "%b %d, %H:%M") -> str:
+    """Render an ISO UTC timestamp (Spotify's or ours) in the Pi's local time."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime(fmt)
+
+
 def create_app(
     db: Database, spotify: SpotifyClient, player: Player, reader=None,
     poller: HistoryPoller | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Modern Record Player")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    templates.env.filters["localtime"] = localtime
 
     def status() -> dict:
         pending = player.pending_scan
@@ -92,7 +107,7 @@ def create_app(
                 "windows": WINDOWS,
                 "recent": db.recent_plays(15),
                 "total_plays": db.play_count(),
-                "last_poll": (poller.last_poll_at or "").replace("T", " ").rstrip("Z") if poller else None,
+                "last_poll": poller.last_poll_at if poller else None,
             },
         )
 

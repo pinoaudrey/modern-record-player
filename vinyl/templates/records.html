@@ -4,7 +4,7 @@
 <h2>Make these records</h2>
 <p class="muted">
   What you actually listen to, from the play history this player collects
-  ({{ total_plays }} plays so far{% if last_poll %}, last checked {{ last_poll }}{% endif %}).
+  ({{ total_plays }} plays so far{% if last_poll %}, last checked {{ last_poll | localtime }}{% endif %}).
   Click <em>Make a record</em>, then hold a blank card on the reader.
 </p>
 
@@ -76,7 +76,7 @@
     <tr>
       <td>{% if p.artwork_url %}<img class="art" src="{{ p.artwork_url }}" alt="">{% endif %}</td>
       <td>{{ p.track_name }}<div class="muted">{{ p.artist }} &middot; {{ p.album_name }}</div></td>
-      <td class="muted">{{ p.played_at[:16].replace('T', ' ') }}</td>
+      <td class="muted">{{ p.played_at | localtime }}</td>
     </tr>
     {% else %}
     <tr><td class="muted">No plays collected yet. Play something on Spotify; the player checks every few minutes.</td></tr>

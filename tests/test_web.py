@@ -259,3 +259,10 @@ def test_index_shows_editorial_note(client):
                                   note="You're playing from a Spotify-curated playlist")
     r = tc.get("/")
     assert "Spotify-curated playlist" in r.text
+
+
+def test_localtime_filter_handles_spotify_and_ours():
+    from vinyl.web import localtime
+    assert localtime("2026-09-09T03:27:18.594Z", "%Y-%m-%dT%H:%M%z") == localtime("2026-09-09T03:27:18Z", "%Y-%m-%dT%H:%M%z")
+    assert localtime(None) == ""
+    assert localtime("garbage") == "garbage"

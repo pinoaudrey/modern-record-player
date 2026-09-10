@@ -6,6 +6,7 @@ kits). Besides the UID, the player reads and writes a short text payload
 card written on one player works on any other one without re-registering.
 """
 
+import logging
 import queue
 import time
 from dataclasses import dataclass
@@ -67,6 +68,13 @@ class RC522Reader:
         # the low-level reader ourselves and hand it over.
         self._reader = SimpleMFRC522.__new__(SimpleMFRC522)
         self._reader.READER = MFRC522(pin_rst=rst_pin)
+        # The library logs (and prints) an error on every failed sector auth,
+        # ten times a second while a card that doesn't use the default key
+        # rests on the reader. The UID still reads; we don't need the noise.
+        lib_log = logging.getLogger("mfrc522Logger")
+        lib_log.handlers.clear()
+        lib_log.propagate = False
+        lib_log.setLevel(logging.CRITICAL)
 
     def poll(self, timeout: float) -> Scan | None:
         deadline = time.monotonic() + timeout

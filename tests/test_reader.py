@@ -95,6 +95,14 @@ def rc522(monkeypatch):
     return RC522Reader()
 
 
+def test_rc522_silences_library_auth_errors(monkeypatch):
+    import logging
+    _fake_mfrc522_module(monkeypatch)
+    RC522Reader()
+    lib_log = logging.getLogger("mfrc522Logger")
+    assert lib_log.propagate is False and lib_log.level == logging.CRITICAL
+
+
 def test_rc522_reset_pin_is_configurable(monkeypatch):
     _fake_mfrc522_module(monkeypatch)
     RC522Reader()
